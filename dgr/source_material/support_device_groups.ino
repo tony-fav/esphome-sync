@@ -110,7 +110,31 @@ uint32_t DeviceGroupSharedMask(uint8_t item)
 
 void DeviceGroupsInit(void)
 {
-  device_group_count = 1;
+  // If no module set the device group count, ...
+  if (!device_group_count) {
+
+    // If relays in separate device groups is enabled, set the device group count to highest numbered
+    // button.
+    if (Settings->flag4.multiple_device_groups) {  // SetOption88 - Enable relays in separate device groups
+      for (uint32_t relay_index = 0; relay_index < MAX_RELAYS; relay_index++) {
+        if (PinUsed(GPIO_REL1, relay_index)) device_group_count = relay_index + 1;
+      }
+    }
+
+    // Set up a minimum of one device group.
+    if (!device_group_count)
+      device_group_count = 1;
+    else if (device_group_count > MAX_DEV_GROUP_NAMES)
+      device_group_count = MAX_DEV_GROUP_NAMES;
+  }
+
+  // If there are more device group names set than the number of device groups needed by the
+  // module, use the device group name count as the device group count.
+  for (; device_group_count < MAX_DEV_GROUP_NAMES; device_group_count++) {
+    if (!*SettingsText(SET_DEV_GROUP_NAME1 + device_group_count)) break;
+  }
+
+  // Initialize the device information for each device group.
   device_groups = (struct device_group *)calloc(device_group_count, sizeof(struct device_group));
   if (!device_groups) {
     AddLog(LOG_LEVEL_ERROR, PSTR("DGR: Error allocating %u-element array"), device_group_count);
@@ -119,7 +143,16 @@ void DeviceGroupsInit(void)
 
   struct device_group * device_group = device_groups;
   for (uint32_t device_group_index = 0; device_group_index < device_group_count; device_group_index++, device_group++) {
-    strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_1);
+    strcpy(device_group->group_name, SettingsText(SET_DEV_GROUP_NAME1 + device_group_index));
+
+    // If the device group name is not set, use the MQTT group topic (with the device group index +
+    // 1 appended for device group indices > 0).
+    if (!device_group->group_name[0]) {
+      strcpy(device_group->group_name, SettingsText(SET_MQTT_GRP_TOPIC));
+      if (device_group_index) {
+        snprintf_P(device_group->group_name, sizeof(device_group->group_name), PSTR("%s%u"), device_group->group_name, device_group_index + 1);
+      }
+    }
     device_group->message_header_length = sprintf_P((char *)device_group->message, PSTR("%s%s"), kDeviceGroupMessage, device_group->group_name) + 1;
     device_group->no_status_share = 0;
     device_group->last_full_status_sequence = -1;
@@ -320,7 +353,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
 #ifdef USE_DEVICE_GROUPS_SEND
         else {
           if (item < DGR_ITEM_LAST_16BIT) device_group->values_16bit[item - DGR_ITEM_MAX_8BIT - 1] = value;
-      }
+        }
 #endif  // USE_DEVICE_GROUPS_SEND
       }
 #ifdef USE_DEVICE_GROUPS_SEND
@@ -397,16 +430,6 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
 #endif
           case DGR_ITEM_COMMAND:
             ExecuteCommand(XdrvMailbox.data, SRC_REMOTE);
-            break;
-          case DGR_ITEM_LIGHT_BRI:
-            ehdgr_brightness = value;
-            break;
-          case DGR_ITEM_LIGHT_CHANNELS:
-            ehdgr_channel_1 = (uint8_t)XdrvMailbox.data[0];
-            ehdgr_channel_2 = (uint8_t)XdrvMailbox.data[1];
-            ehdgr_channel_3 = (uint8_t)XdrvMailbox.data[2];
-            ehdgr_channel_4 = (uint8_t)XdrvMailbox.data[3];
-            ehdgr_channel_5 = (uint8_t)XdrvMailbox.data[4];
             break;
         }
         XdrvCall(FUNC_DEVICE_GROUP_ITEM);
