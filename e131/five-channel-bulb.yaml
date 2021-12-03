@@ -1,0 +1,123 @@
+substitutions:
+  friendly_name: Five Channel Bulb
+
+esphome:
+  name: five-channel-bulb
+  platform: ESP8266
+  board: esp01_1m
+  libraries:
+    - ESP8266WiFi
+    - ESPAsyncE131
+  includes:
+    - E131.h
+# 'E131.h' is a file in my esphome folder that is just one line with:
+# #include <ESPAsyncE131.h>
+# so that ESPHome actually includes the library.
+# E131 implementation based on Forkineye's library and example.
+
+logger:
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret fivechannelbulb_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+output:
+  - platform: esp8266_pwm
+    pin: GPIO5
+    id: pwm_red
+  - platform: esp8266_pwm
+    pin: GPIO4
+    id: pwm_green
+  - platform: esp8266_pwm
+    pin: GPIO14
+    id: pwm_blue
+  - platform: esp8266_pwm
+    pin: GPIO12
+    id: pwm_cw
+  - platform: esp8266_pwm
+    pin: GPIO13
+    id: pwm_ww
+
+light:
+  - platform: rgbww
+    name: $friendly_name
+    id: my_light
+    red: pwm_red
+    green: pwm_green
+    blue: pwm_blue
+    cold_white: pwm_cw
+    warm_white: pwm_ww
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    color_interlock: true
+    constant_brightness: true
+    effects:
+      - lambda:
+          name: E131
+          update_interval: 0s
+          lambda: |-
+            // use statics like Arduino declarations at the very top
+            static int state = 0;
+            static float scaled_r = 0.0;
+            static float scaled_g = 0.0;
+            static float scaled_b = 0.0;
+            static ESPAsyncE131 e131(1); // 1 universe
+            
+            // use state == 0 like setup() then state == 1 like loop()
+            if (state == 0) {
+              if (e131.begin(E131_MULTICAST, 1, 1))
+                state = 1;
+              else
+                return;
+            }
+            
+            if (e131.isEmpty()) return;
+              
+            e131_packet_t packet;
+            e131.pull(&packet);
+            
+            // do the thing
+            float r = (float)packet.property_values[1]/255.0f;
+            float g = (float)packet.property_values[2]/255.0f;
+            float b = (float)packet.property_values[3]/255.0f;
+            
+            float m = 0.0f;
+            if ( (r>=g) && (r>=b) ) { m = r; }
+            else if ( g >= b )      { m = g; }
+            else                    { m = b; }
+            
+            if (m != 0.0f) {
+              scaled_r = r/m;
+              scaled_g = g/m;
+              scaled_b = b/m;
+            } else {
+              scaled_r = 0.0f;
+              scaled_g = 0.0f;
+              scaled_b = 0.0f;
+            }
+            auto call = id(my_light).turn_on();
+            call.set_transition_length(0);
+            call.set_brightness(m); 
+            call.set_color_mode(ColorMode::RGB);
+            call.set_rgb(scaled_r, scaled_g, scaled_b);
+            call.set_publish(false);
+            call.set_save(false);
+            call.perform();
