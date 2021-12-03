@@ -1,8 +1,8 @@
 substitutions:
-  friendly_name: Eight Channel AC Dimmer
+  friendly_name: Eight Channel AC Dimmer 8266
 
 esphome:
-  name: eight-channel-ac-dimmer
+  name: eight-channel-ac-dimmer-8266
   platform: ESP8266
   board: d1_mini
   libraries:
@@ -15,7 +15,7 @@ esphome:
 # so that ESPHome actually includes the library.
 # E131 implementation based on Forkineye's library and example.
 
-# THIS WORKS BUT TAXES THE ESP8266. ESP32 is suggested.
+# This technically works but seems to tax the ESP8266.
 
 logger:
 
@@ -27,7 +27,7 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_pass
   manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
-    static_ip: !secret eightchannelacdimmer_ip
+    static_ip: !secret eightchannelacdimmer8266_ip
     gateway: !secret wifi_gateway
     subnet: !secret wifi_subnet
 
@@ -111,9 +111,6 @@ light:
           lambda: |-
             // use statics like Arduino declarations at the very top
             static int state = 0;
-            static float scaled_r = 0.0;
-            static float scaled_g = 0.0;
-            static float scaled_b = 0.0;
             static ESPAsyncE131 e131(1); // 1 universe
             
             // use state == 0 like setup() then state == 1 like loop()
