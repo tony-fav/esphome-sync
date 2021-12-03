@@ -1,0 +1,126 @@
+substitutions:
+  friendly_name: Five Channel Bulb
+
+esphome:
+  name: five-channel-bulb
+  platform: ESP8266
+  board: esp01_1m
+# DDP implementation based on Kauf HA's implementation but in a lambda rather than a custom light component.
+
+logger:
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret fivechannelbulb_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+output:
+  - platform: esp8266_pwm
+    pin: GPIO5
+    id: pwm_red
+  - platform: esp8266_pwm
+    pin: GPIO4
+    id: pwm_green
+  - platform: esp8266_pwm
+    pin: GPIO14
+    id: pwm_blue
+  - platform: esp8266_pwm
+    pin: GPIO12
+    id: pwm_cw
+  - platform: esp8266_pwm
+    pin: GPIO13
+    id: pwm_ww
+
+light:
+  - platform: rgbww
+    name: $friendly_name
+    id: my_light
+    red: pwm_red
+    green: pwm_green
+    blue: pwm_blue
+    cold_white: pwm_cw
+    warm_white: pwm_ww
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    color_interlock: true
+    constant_brightness: true
+    effects:
+      - lambda:
+          name: DDP
+          update_interval: 0s
+          lambda: |-
+            // statics in light effects are like globals in Arduino
+            static float scaled_r = 0.0;
+            static float scaled_g = 0.0;
+            static float scaled_b = 0.0;
+            static std::unique_ptr<WiFiUDP> ddp_udp;
+          
+            // allocate and start UDP
+            // this is like the start() in an Arduino sketch
+            if (!ddp_udp) {
+              ddp_udp = make_unique<WiFiUDP>();
+              if (!ddp_udp->begin(4048)) {   // always listen on DDP port
+                return;
+              }
+            }
+            
+            // the rest is like the loop() in an Arduino sketch
+
+            // read UDP payload
+            std::vector<uint8_t> payload;
+            while (uint16_t packet_size = ddp_udp->parsePacket()) {
+              payload.resize(packet_size);
+              if (!ddp_udp->read(&payload[0], payload.size())) {
+                continue;
+              }
+            }
+        
+            // ignore small payload
+            if (payload.size() < 2) {
+              return;
+            }
+
+            // do the thing
+            float r = (float)payload[10]/255.0f;
+            float g = (float)payload[11]/255.0f;
+            float b = (float)payload[12]/255.0f;
+            
+            float m = 0.0f;
+            if ( (r>=g) && (r>=b) ) { m = r; }
+            else if ( g >= b )      { m = g; }
+            else                    { m = b; }
+            
+            if (m != 0.0f) {
+              scaled_r = r/m;
+              scaled_g = g/m;
+              scaled_b = b/m;
+            } else {
+              scaled_r = 0.0f;
+              scaled_g = 0.0f;
+              scaled_b = 0.0f;
+            }
+            auto call = id(my_light).turn_on();
+            call.set_transition_length(0);
+            call.set_brightness(m); 
+            call.set_color_mode(ColorMode::RGB);
+            call.set_rgb(scaled_r, scaled_g, scaled_b);
+            call.set_publish(false);
+            call.set_save(false);
+            call.perform();
