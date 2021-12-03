@@ -21,6 +21,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#ifdef USE_DEVICE_GROUPS
+
+//#define DEVICE_GROUPS_DEBUG
 #define DGR_MULTICAST_REPEAT_COUNT  1       // Number of times to re-send each multicast
 #define DGR_ACK_WAIT_TIME           150     // Initial ms to wait for ack's
 #define DGR_MEMBER_TIMEOUT          45000   // ms to wait for ack's before removing a member
@@ -28,8 +31,6 @@
 #define DEVICE_GROUP_MESSAGE        "TASMOTA_DGR"
 
 const char kDeviceGroupMessage[] PROGMEM = DEVICE_GROUP_MESSAGE;
-
-bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, ...);
 
 struct device_group_member {
   struct device_group_member * flink;
@@ -54,6 +55,11 @@ struct device_group {
   char group_name[TOPSZ];
   uint8_t message[128];
   struct device_group_member * device_group_members;
+#ifdef USE_DEVICE_GROUPS_SEND
+  uint8_t values_8bit[DGR_ITEM_LAST_8BIT];
+  uint16_t values_16bit[DGR_ITEM_LAST_16BIT - DGR_ITEM_MAX_8BIT - 1];
+  uint32_t values_32bit[DGR_ITEM_LAST_32BIT - DGR_ITEM_MAX_16BIT - 1];
+#endif  // USE_DEVICE_GROUPS_SEND
 };
 
 WiFiUDP device_groups_udp;
@@ -104,31 +110,75 @@ uint32_t DeviceGroupSharedMask(uint8_t item)
 
 void DeviceGroupsInit(void)
 {
-  device_group_count = 1;
+  // If no module set the device group count, ...
+  if (!device_group_count) {
+
+    // If relays in separate device groups is enabled, set the device group count to highest numbered
+    // button.
+    if (Settings->flag4.multiple_device_groups) {  // SetOption88 - Enable relays in separate device groups
+      for (uint32_t relay_index = 0; relay_index < MAX_RELAYS; relay_index++) {
+        if (PinUsed(GPIO_REL1, relay_index)) device_group_count = relay_index + 1;
+      }
+    }
+
+    // Set up a minimum of one device group.
+    if (!device_group_count)
+      device_group_count = 1;
+    else if (device_group_count > MAX_DEV_GROUP_NAMES)
+      device_group_count = MAX_DEV_GROUP_NAMES;
+  }
+
+  // If there are more device group names set than the number of device groups needed by the
+  // module, use the device group name count as the device group count.
+  for (; device_group_count < MAX_DEV_GROUP_NAMES; device_group_count++) {
+    if (!*SettingsText(SET_DEV_GROUP_NAME1 + device_group_count)) break;
+  }
+
+  // Initialize the device information for each device group.
   device_groups = (struct device_group *)calloc(device_group_count, sizeof(struct device_group));
   if (!device_groups) {
-    ESP_LOGE("DGR", "Error allocating %u-element array", device_group_count);
+    AddLog(LOG_LEVEL_ERROR, PSTR("DGR: Error allocating %u-element array"), device_group_count);
     return;
   }
+
   struct device_group * device_group = device_groups;
   for (uint32_t device_group_index = 0; device_group_index < device_group_count; device_group_index++, device_group++) {
-    strcpy(device_group->group_name, TEST_DEVICE_GROUP_NAME);
+    strcpy(device_group->group_name, SettingsText(SET_DEV_GROUP_NAME1 + device_group_index));
+
+    // If the device group name is not set, use the MQTT group topic (with the device group index +
+    // 1 appended for device group indices > 0).
+    if (!device_group->group_name[0]) {
+      strcpy(device_group->group_name, SettingsText(SET_MQTT_GRP_TOPIC));
+      if (device_group_index) {
+        snprintf_P(device_group->group_name, sizeof(device_group->group_name), PSTR("%s%u"), device_group->group_name, device_group_index + 1);
+      }
+    }
     device_group->message_header_length = sprintf_P((char *)device_group->message, PSTR("%s%s"), kDeviceGroupMessage, device_group->group_name) + 1;
     device_group->no_status_share = 0;
     device_group->last_full_status_sequence = -1;
   }
+
+  // If both in and out shared items masks are 0, assume they're unitialized and initialize them.
+  if (!Settings->device_group_share_in && !Settings->device_group_share_out) {
+    Settings->device_group_share_in = Settings->device_group_share_out = 0xffffffff;
+  }
+
   device_groups_initialized = true;
 }
 
 void DeviceGroupsStart()
 {
-  if (!device_groups_up) {
+  if (Settings->flag4.device_groups_enabled && !device_groups_up && !TasmotaGlobal.restart_flag) {
+
+    // If we haven't successfuly initialized device groups yet, attempt to do it now.
     if (!device_groups_initialized) {
       DeviceGroupsInit();
       if (!device_groups_initialized) return;
     }
+
+    // Subscribe to device groups multicasts.
     if (!device_groups_udp.beginMulticast(WiFi.localIP(), IPAddress(DEVICE_GROUPS_ADDRESS), DEVICE_GROUPS_PORT)) {
-      ESP_LOGE("DGR", "Error subscribing");
+      AddLog(LOG_LEVEL_ERROR, PSTR("DGR: Error subscribing"));
       return;
     }
     device_groups_up = true;
@@ -144,7 +194,7 @@ void DeviceGroupsStart()
       device_group->initial_status_requests_remaining = 10;
       device_group->next_ack_check_time = next_check_time;
     }
-    ESP_LOGD("DGR", "(Re)discovering members");
+    AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: (Re)discovering members"));
   }
 }
 
@@ -177,7 +227,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
 
   // Initialize the log buffer.
   char * log_buffer = (char *)malloc(512);
-  log_length = sprintf(log_buffer, PSTR("%s %s message %s %s: seq=%u, flags=%u"), (received ? PSTR("Received") : PSTR("Sending")), device_group->group_name, (received ? PSTR("from") : PSTR("to")), (device_group_member ? IPAddressToString(device_group_member->ip_address) : received ? PSTR("local") : PSTR("network")), message_sequence, flags);
+  log_length = sprintf(log_buffer, PSTR("DGR: %s %s message %s %s: seq=%u, flags=%u"), (received ? PSTR("Received") : PSTR("Sending")), device_group->group_name, (received ? PSTR("from") : PSTR("to")), (device_group_member ? IPAddressToString(device_group_member->ip_address) : received ? PSTR("local") : PSTR("network")), message_sequence, flags);
   log_ptr = log_buffer + log_length;
   log_remaining = 512 - log_length;
 
@@ -264,6 +314,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
     item = *message_ptr++;
     if (!item) break; // Done
 
+#ifdef DEVICE_GROUPS_DEBUG
     switch (item) {
       case DGR_ITEM_FLAGS:
       case DGR_ITEM_LIGHT_FADE:
@@ -280,8 +331,9 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
       case DGR_ITEM_LIGHT_CHANNELS:
         break;
       default:
-        ESP_LOGE("DGR", "*** Invalid item=%u", item);
+        AddLog(LOG_LEVEL_ERROR, PSTR("DGR: *** Invalid item=%u"), item);
     }
+#endif  // DEVICE_GROUPS_DEBUG
 
     log_length = snprintf(log_ptr, log_remaining, PSTR(", %u="), item);
     log_ptr += log_length;
@@ -294,8 +346,21 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
         if (item > DGR_ITEM_MAX_16BIT) {
           value |= *message_ptr++ << 16;
           value |= *message_ptr++ << 24;
+#ifdef USE_DEVICE_GROUPS_SEND
+          if (item < DGR_ITEM_LAST_32BIT) device_group->values_32bit[item - DGR_ITEM_MAX_16BIT - 1] = (item == DGR_ITEM_POWER ? value & 0xffffff : value);
+#endif  // USE_DEVICE_GROUPS_SEND
         }
+#ifdef USE_DEVICE_GROUPS_SEND
+        else {
+          if (item < DGR_ITEM_LAST_16BIT) device_group->values_16bit[item - DGR_ITEM_MAX_8BIT - 1] = value;
+        }
+#endif  // USE_DEVICE_GROUPS_SEND
       }
+#ifdef USE_DEVICE_GROUPS_SEND
+      else {
+        if (item < DGR_ITEM_LAST_8BIT) device_group->values_8bit[item] = value;
+      }
+#endif  // USE_DEVICE_GROUPS_SEND
       log_length = snprintf(log_ptr, log_remaining, PSTR("%u"), value);
     }
     else {
@@ -329,7 +394,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
       else
         device_group->no_status_share &= ~mask;
 
-      if ((!(device_group->no_status_share & mask) || device_group_member == nullptr) && (!mask || (mask & device_group_share_in))) {
+      if ((!(device_group->no_status_share & mask) || device_group_member == nullptr) && (!mask || (mask & Settings->device_group_share_in))) {
         item_processed = true;
         XdrvMailbox.command_code = item;
         XdrvMailbox.payload = value;
@@ -338,13 +403,19 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
         log_remaining--;
         switch (item) {
           case DGR_ITEM_POWER:
-            if (XdrvMailbox.index & DGR_FLAG_LOCAL) {
+            if (Settings->flag4.multiple_device_groups) {  // SetOption88 - Enable relays in separate device groups
+              uint32_t device = Settings->device_group_tie[device_group_index];
+              if (device && device <= TasmotaGlobal.devices_present) {
+                bool on = (value & 1);
+                if (on != ((TasmotaGlobal.power >> (device - 1)) & 1)) ExecuteCommandPower(device, (on ? POWER_ON : POWER_OFF), SRC_REMOTE);
+              }
+            }
+            else if (XdrvMailbox.index & DGR_FLAG_LOCAL) {
               uint8_t mask_devices = value >> 24;
               if (mask_devices > TasmotaGlobal.devices_present) mask_devices = TasmotaGlobal.devices_present;
               for (uint32_t i = 0; i < mask_devices; i++) {
                 uint32_t mask = 1 << i;
                 bool on = (value & mask);
-                ESP_LOGD("DGR", "TasmotaGlobal.power: %d", TasmotaGlobal.power);
                 if (on != (TasmotaGlobal.power & mask)) ExecuteCommandPower(i + 1, (on ? POWER_ON : POWER_OFF), SRC_REMOTE);
               }
             }
@@ -352,11 +423,13 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
           case DGR_ITEM_NO_STATUS_SHARE:
             device_group->no_status_share = value;
             break;
+#ifdef USE_RULES
+          case DGR_ITEM_EVENT:
+            CmndEvent();
+            break;
+#endif
           case DGR_ITEM_COMMAND:
             ExecuteCommand(XdrvMailbox.data, SRC_REMOTE);
-            break;
-          case DGR_ITEM_LIGHT_BRI:
-            ehdgr_brightness = value;
             break;
         }
         XdrvCall(FUNC_DEVICE_GROUP_ITEM);
@@ -372,7 +445,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
 
 write_log:
   *log_ptr++ = 0;
-  ESP_LOGD("DGR", "%s", log_buffer);
+  AddLogData(LOG_LEVEL_DEBUG_MORE, log_buffer);
 
   // If this is a received status request message, then if the requestor didn't just ack our
   // previous full status update, send a full status update.
@@ -395,13 +468,12 @@ write_log:
       }
       delay(10);
     }
-    if (attempt > 5) ESP_LOGE("DGR", "Error sending message");
-      
+    if (attempt > 5) AddLog(LOG_LEVEL_ERROR, PSTR("DGR: Error sending message"));
   }
   goto cleanup;
 
 badmsg:
-  ESP_LOGE("DGR", "%s ** incorrect length", log_buffer);
+  AddLog(LOG_LEVEL_ERROR, PSTR("%s ** incorrect length"), log_buffer);
 
 cleanup:
   free(log_buffer);
@@ -428,6 +500,11 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
   uint8_t device_group_index = -device;
   if (device > 0) {
     device_group_index = 0;
+    if (Settings->flag4.multiple_device_groups) {  // SetOption88 - Enable relays in separate device groups
+      for (; device_group_index < device_group_count; device_group_index++) {
+        if (Settings->device_group_tie[device_group_index] == device) break;
+      }
+    }
   }
   if (device_group_index >= device_group_count) return 0;
 
@@ -438,7 +515,9 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
   if (device_group->initial_status_requests_remaining) return 1;
 
   // Load the message header, sequence and flags.
-  ESP_LOGD("DGR", "Building %s %spacket", device_group->group_name, (message_type == DGR_MSGTYP_FULL_STATUS ? "full status " : ""));
+#ifdef DEVICE_GROUPS_DEBUG
+  AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Building %s %spacket"), device_group->group_name, (message_type == DGR_MSGTYP_FULL_STATUS ? PSTR("full status ") : PSTR("")));
+#endif  // DEVICE_GROUPS_DEBUG
   uint16_t original_sequence = device_group->outgoing_sequence;
   uint16_t flags = 0;
   if (message_type == DGR_MSGTYP_UPDATE_MORE_TO_COME)
@@ -460,6 +539,9 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
 
     // Call the drivers to build the status update.
     power_t power = TasmotaGlobal.power;
+    if (Settings->flag4.multiple_device_groups) {  // SetOption88 - Enable relays in separate device groups
+      power = (power >> (Settings->device_group_tie[device_group_index] - 1)) & 1;
+    }
     SendDeviceGroupMessage(-device_group_index, DGR_MSGTYP_PARTIAL_UPDATE, DGR_ITEM_NO_STATUS_SHARE, device_group->no_status_share, DGR_ITEM_POWER, power);
     XdrvMailbox.index = 0;
     if (device_group_index == 0 && first_device_group_is_local) XdrvMailbox.index = DGR_FLAG_LOCAL;
@@ -479,6 +561,14 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
   }
 
   else {
+#ifdef USE_DEVICE_GROUPS_SEND
+    uint8_t out_buffer[128];
+    bool escaped;
+    char chr;
+    char oper;
+    uint32_t old_value;
+    uint8_t * out_ptr = out_buffer;
+#endif  // USE_DEVICE_GROUPS_SEND
     struct item {
       uint8_t item;
       uint8_t flags;
@@ -496,6 +586,81 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
 
     // Build an array of all the items and values in this update.
     item_ptr = item_array;
+#ifdef USE_DEVICE_GROUPS_SEND
+    if (message_type == DGR_MSGTYPE_UPDATE_COMMAND) {
+      value_ptr = (uint8_t *)XdrvMailbox.data;
+      while ((item = strtoul((char *)value_ptr, (char **)&value_ptr, 0))) {
+        item_ptr->item = item;
+        if (*value_ptr != '=') return 1;
+        value_ptr++;
+
+        // If flags were specified for this item, save them.
+        item_ptr->flags = 0;
+        if (toupper(*value_ptr) == 'N') {
+          value_ptr++;
+          item_ptr->flags = DGR_ITEM_FLAG_NO_SHARE;
+        }
+
+        if (item <= DGR_ITEM_MAX_32BIT) {
+          oper = 0;
+          if (*value_ptr == '@') {
+            oper = value_ptr[1];
+            value_ptr += 2;
+          }
+          value = (isdigit(*value_ptr) ? strtoul((char *)value_ptr, (char **)&value_ptr, 0) : oper == '^' ? 0xffffffff : 1);
+          if (oper) {
+            old_value = (item <= DGR_ITEM_MAX_8BIT ? device_group->values_8bit[item] : (item <= DGR_ITEM_MAX_16BIT ? device_group->values_16bit[item - DGR_ITEM_MAX_8BIT - 1] : device_group->values_32bit[item - DGR_ITEM_MAX_16BIT - 1]));
+            value = (oper == '+' ? old_value + value : oper == '-' ? old_value - value : oper == '^' ? old_value ^ value : oper == '|' ? old_value | value : old_value == '&' ? old_value & value : old_value);
+          }
+          item_ptr->value = value;
+        }
+        else {
+          item_ptr->value_ptr = out_ptr;
+          if (item <= DGR_ITEM_MAX_STRING) {
+            escaped = false;
+            while ((chr = *value_ptr++)) {
+              if (chr == ' ' && !escaped) break;
+              if (!(escaped = (chr == '\\' && !escaped))) *out_ptr++ = chr;
+            }
+            *out_ptr++ = 0;
+          }
+          else {
+            switch (item) {
+              case DGR_ITEM_LIGHT_CHANNELS:
+                {
+                  bool hex = false;
+                  char * endptr;
+                  if (*value_ptr == '#') {
+                    value_ptr++;
+                    hex = true;
+                  }
+                  for (int i = 0; i < 6; i++) {
+                    *out_ptr = 0;
+                    if (*value_ptr != ' ') {
+                      if (hex) {
+                        endptr = (char *)value_ptr + 2;
+                        chr = *endptr;
+                        *endptr = 0;
+                        *out_ptr = strtoul((char *)value_ptr, (char **)&value_ptr, 16);
+                        *endptr = chr;
+                      }
+                      else {
+                        *out_ptr = strtoul((char *)value_ptr, (char **)&value_ptr, 10);
+                        if (*value_ptr == ',') value_ptr++;
+                      }
+                    }
+                    out_ptr++;
+                  }
+                }
+                break;
+            }
+          }
+        }
+        item_ptr++;
+      }
+    }
+    else {
+#endif  // USE_DEVICE_GROUPS_SEND
       va_start(ap, message_type);
       while ((item = va_arg(ap, int))) {
         item_ptr->item = item;
@@ -510,6 +675,9 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
         item_ptr++;
       }
       va_end(ap);
+#ifdef USE_DEVICE_GROUPS_SEND
+    }
+#endif  // USE_DEVICE_GROUPS_SEND
     item_ptr->item = 0;
 
     // If we're still building this update or all group members haven't acknowledged the previous
@@ -568,7 +736,9 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
         // Advance past the item value.
         previous_message_ptr += value;
       }
-      ESP_LOGD("DGR", "%u items carried over", kept_item_count);
+#ifdef DEVICE_GROUPS_DEBUG
+      AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: %u items carried over"), kept_item_count);
+#endif  // DEVICE_GROUPS_DEBUG
     }
 
     // Itertate through the passed items adding them and their values to the message.
@@ -582,7 +752,7 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
         else if (!building_status_message)
           device_group->no_status_share &= ~mask;
         if (message_type != DGR_MSGTYPE_UPDATE_COMMAND) {
-          shared = (!(mask & device_group->no_status_share) && (device_group_index || (mask & device_group_share_out)));
+          shared = (!(mask & device_group->no_status_share) && (device_group_index || (mask & Settings->device_group_share_out)));
         }
       }
       if (shared) {
@@ -604,7 +774,7 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
               *message_ptr++ = value & 0xff;
               value >>= 8;
               // For the power item, the device count is overlayed onto the highest 8 bits.
-              if (item == DGR_ITEM_POWER && !value) value = (device_group_index == 0 && first_device_group_is_local ? TasmotaGlobal.devices_present : 1);
+              if (item == DGR_ITEM_POWER && !value) value = (!Settings->flag4.multiple_device_groups && device_group_index == 0 && first_device_group_is_local ? TasmotaGlobal.devices_present : 1);
               *message_ptr++ = value;
             }
           }
@@ -651,6 +821,15 @@ bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, .
   device_group->multicasts_remaining = DGR_MULTICAST_REPEAT_COUNT;
   SendReceiveDeviceGroupMessage(device_group, nullptr, device_group->message, device_group->message_length, false);
 
+#ifdef USE_DEVICE_GROUPS_SEND
+  // If requested, handle this updated locally as well.
+  if (with_local) {
+    struct XDRVMAILBOX save_XdrvMailbox = XdrvMailbox;
+    SendReceiveDeviceGroupMessage(device_group, nullptr, device_group->message, device_group->message_length, true);
+    XdrvMailbox = save_XdrvMailbox;
+  }
+#endif  // USE_DEVICE_GROUPS_SEND
+
   uint32_t now = millis();
   if (message_type == DGR_MSGTYP_UPDATE_MORE_TO_COME) {
     device_group->message_length = 0;
@@ -689,14 +868,14 @@ void ProcessDeviceGroupMessage(uint8_t * message, int message_length)
     if (!device_group_member) {
       device_group_member = (struct device_group_member *)calloc(1, sizeof(struct device_group_member));
       if (device_group_member == nullptr) {
-        ESP_LOGE("DGR", "Error allocating member block");
+        AddLog(LOG_LEVEL_ERROR, PSTR("DGR: Error allocating member block"));
         return;
       }
       device_group_member->ip_address = remote_ip;
       device_group_member->acked_sequence = device_group->outgoing_sequence;
       device_group->member_timeout_time = millis() + DGR_MEMBER_TIMEOUT;
       *flink = device_group_member;
-      ESP_LOGD("DGR", "Member %s added", IPAddressToString(remote_ip));
+      AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Member %s added"), IPAddressToString(remote_ip));
       break;
     }
     else if (device_group_member->ip_address == remote_ip) {
@@ -708,9 +887,24 @@ void ProcessDeviceGroupMessage(uint8_t * message, int message_length)
   SendReceiveDeviceGroupMessage(device_group, device_group_member, message, message_length, true);
 }
 
+void DeviceGroupStatus(uint8_t device_group_index)
+{
+  if (Settings->flag4.device_groups_enabled && device_group_index < device_group_count) {
+    char buffer[1024];
+    int member_count = 0;
+    struct device_group * device_group = &device_groups[device_group_index];
+    buffer[0] = buffer[1] = 0;
+    for (struct device_group_member * device_group_member = device_group->device_group_members; device_group_member; device_group_member = device_group_member->flink) {
+      snprintf_P(buffer, sizeof(buffer), PSTR("%s,{\"IPAddress\":\"%s\",\"ResendCount\":%u,\"LastRcvdSeq\":%u,\"LastAckedSeq\":%u}"), buffer, IPAddressToString(device_group_member->ip_address), device_group_member->unicast_count, device_group_member->received_sequence, device_group_member->acked_sequence);
+      member_count++;
+    }
+    Response_P(PSTR("{\"" D_CMND_DEVGROUPSTATUS "\":{\"Index\":%u,\"GroupName\":\"%s\",\"MessageSeq\":%u,\"MemberCount\":%d,\"Members\":[%s]}}"), device_group_index, device_group->group_name, device_group->outgoing_sequence, member_count, &buffer[1]);
+  }
+}
+
 void DeviceGroupsLoop(void)
 {
-  if (!device_groups_up) return;
+  if (!device_groups_up || TasmotaGlobal.restart_flag) return;
 
   while (device_groups_udp.parsePacket()) {
     uint8_t packet_buffer[512];
@@ -727,7 +921,9 @@ void DeviceGroupsLoop(void)
 
   // If it's time to check on things, iterate through the device groups.
   if ((int32_t)(now - next_check_time) >= 0) {
-    ESP_LOGD("DGR", "Checking next_check_time=%u, now=%u", next_check_time, now);
+#ifdef DEVICE_GROUPS_DEBUG
+AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Checking next_check_time=%u, now=%u"), next_check_time, now);
+#endif  // DEVICE_GROUPS_DEBUG
     next_check_time = now + DGR_ANNOUNCEMENT_INTERVAL * 2;
 
     struct device_group * device_group = device_groups;
@@ -742,7 +938,9 @@ void DeviceGroupsLoop(void)
           // If we're still sending the initial status request message, send it.
           if (device_group->initial_status_requests_remaining) {
             if (--device_group->initial_status_requests_remaining) {
-              ESP_LOGD("DGR", "Sending initial status request for group %s", device_group->group_name);
+#ifdef DEVICE_GROUPS_DEBUG
+            AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Sending initial status request for group %s"), device_group->group_name);
+#endif  // DEVICE_GROUPS_DEBUG
               SendReceiveDeviceGroupMessage(device_group, nullptr, device_group->message, device_group->message_length, false);
               device_group->message[device_group->message_header_length + 2] = DGR_FLAG_STATUS_REQUEST; // The reset flag is on only for the first packet - turn it off now
               next_check_time = device_group->next_ack_check_time = now + 200;
@@ -758,7 +956,9 @@ void DeviceGroupsLoop(void)
 
           // If we're done initializing, iterate through the group memebers, ...
           else {
-            ESP_LOGD("DGR", "Checking for %s ack's", device_group->group_name);
+#ifdef DEVICE_GROUPS_DEBUG
+            AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Checking for %s ack's"), device_group->group_name);
+#endif  // DEVICE_GROUPS_DEBUG
             bool acked = true;
             struct device_group_member ** flink = &device_group->device_group_members;
             struct device_group_member * device_group_member;
@@ -772,7 +972,7 @@ void DeviceGroupsLoop(void)
                 if ((int32_t)(now - device_group->member_timeout_time) >= 0) {
                   *flink = device_group_member->flink;
                   free(device_group_member);
-                  ESP_LOGD("DGR", "Member %s removed", IPAddressToString(device_group_member->ip_address));
+                  AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: Member %s removed"), IPAddressToString(device_group_member->ip_address));
                   continue;
                 }
 
@@ -817,7 +1017,9 @@ void DeviceGroupsLoop(void)
       // that even if all the devices booted at the same time, they don't all multicast their
       // announcements at the same time.
       else {
-        ESP_LOGD("DGR", "next_announcement_time=%u, now=%u", device_group->next_announcement_time, now);
+#ifdef DEVICE_GROUPS_DEBUG
+        AddLog(LOG_LEVEL_DEBUG, PSTR("DGR: next_announcement_time=%u, now=%u"), device_group->next_announcement_time, now);
+#endif  // DEVICE_GROUPS_DEBUG
         if ((int32_t)(now - device_group->next_announcement_time) >= 0) {
           SendReceiveDeviceGroupMessage(device_group, nullptr, device_group->message, BeginDeviceGroupMessage(device_group, DGR_FLAG_ANNOUNCEMENT, true) - device_group->message, false);
           device_group->next_announcement_time = now + DGR_ANNOUNCEMENT_INTERVAL + random(10000);
@@ -827,3 +1029,5 @@ void DeviceGroupsLoop(void)
     }
   }
 }
+
+#endif  // USE_DEVICE_GROUPS

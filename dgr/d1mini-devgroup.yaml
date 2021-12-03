@@ -6,8 +6,14 @@ esphome:
   platform: ESP8266
   board: d1_mini
   includes:
-    - device_groups_reqs.h
-    - device_groups.h
+    - d1mini-devgroup.h     # #define statements for this device
+    - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
+    - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: start_and_loop_dev_group
+      
     
 logger:
   logs:
@@ -46,41 +52,59 @@ script:
     then:
       - lambda: |-
           // do the device group things
+          static int state = 0;
+          if (state == 0) {
+            InitTasmotaCompatibility();
+            state = 1;
+          }
           DeviceGroupsStart();
           DeviceGroupsLoop();
       - lambda: |-
+          // debug messages
+          static unsigned long last_output_time = millis();
+          if (millis() < last_output_time + 10000) return;
+          last_output_time = millis();
+          ESP_LOGI("DGR", "%d, %d, %d, %d, %d, %d, %d, %d, %d - %d - %d, %d, %d, %d, %d", 
+          ehdgr_power_1,  ehdgr_power_2,  ehdgr_power_3,  
+          ehdgr_power_4,  ehdgr_power_5,  ehdgr_power_6,  
+          ehdgr_power_7,  ehdgr_power_8,  ehdgr_power_9,
+          ehdgr_brightness,
+          ehdgr_channel_1, ehdgr_channel_2, ehdgr_channel_3, ehdgr_channel_4, ehdgr_channel_5);
+      - lambda: |-
           // update light 1 state
-          static bool state_1 = id(my_light).current_values.get_state();
-          static int brightness_1 = id(my_light).current_values.get_brightness()*255;
+          static bool state = id(my_light).current_values.get_state();
+          static int brightness = id(my_light).current_values.get_brightness()*255;
           
-          bool n_state_1 = (bool)((TasmotaGlobal.power >> 0) & 0x1);
+          if (!id(use_dgr).state) return;
           
           bool set_state_on  = false;
           bool set_state_off = false;
           bool set_brightness = false;
           
-          if (state_1 != n_state_1) {
-            if (n_state_1) {
+          if (state != ehdgr_power_9) {
+            if (ehdgr_power_9) {
               set_state_on = true;
             } else {
               set_state_off = true;
             }
           }
-          if (brightness_1 != ehdgr_brightness) {
+          if (ehdgr_power_9 && (brightness != ehdgr_brightness)) {
             set_brightness = true;
           }
           
-          brightness_1 = ehdgr_brightness;
-          state_1 = n_state_1;
-          
           if (set_state_on || set_brightness) {
+            brightness = ehdgr_brightness;
+            state = true;
+            
             auto call = id(my_light).turn_on();
-            call.set_brightness((float)brightness_1/255.0f);
+            call.set_brightness((float)brightness/255.0f);
             call.set_transition_length(0);
             call.perform();
           }
           
           if (set_state_off) {
+            state = false;
+            
             auto call = id(my_light).turn_off();
             call.set_transition_length(0);
             call.perform();
@@ -97,7 +121,8 @@ script:
 
 switch:
   - platform: template
-    name: "SO85"
+    name: "Enable DGR"
+    id: enable_dgr
     lambda: |-
       if (id(start_and_loop_dev_group).is_running()) {
         return true;
@@ -108,7 +133,11 @@ switch:
       - script.execute: start_and_loop_dev_group
     turn_off_action:
       - script.execute: stop_dev_group
-    # restore_state: true
+    
+  - platform: template
+    id: use_dgr
+    name: "Use DGR"
+    optimistic: true
 
 light:
   - platform: monochromatic

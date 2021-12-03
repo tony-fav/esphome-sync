@@ -2,10 +2,9 @@
   #define DEVICE_GROUPS_ADDRESS 239,255,250,250  // Device groups multicast address
   #define DEVICE_GROUPS_PORT 4447                // Device groups multicast port
   #define DEVICE_GROUPS_DEBUG
-const uint8_t MAX_RELAYS = 8;
-#define TEST_DEVICE_GROUP_NAME "BedroomHallwayLights"
-uint32_t device_group_share_in  = 0xFFFFFFFF;     
-uint32_t device_group_share_out = 0x00000000;
+  // #define USE_DEVICE_GROUPS_SEND 
+
+const uint8_t MAX_RELAYS = 20;
 
 bool ehdgr_power_1 = false;
 bool ehdgr_power_2 = false;
@@ -15,6 +14,7 @@ bool ehdgr_power_5 = false;
 bool ehdgr_power_6 = false;
 bool ehdgr_power_7 = false;
 bool ehdgr_power_8 = false;
+bool ehdgr_power_9 = false;
 uint8_t ehdgr_brightness = 0;
 uint8_t ehdgr_channel_1 = 0;
 uint8_t ehdgr_channel_2 = 0;
@@ -63,6 +63,8 @@ const char kCommandSource[] PROGMEM = "I|MQTT|Restart|Button|Switch|Backlog|Seri
                                       "Timer|Rule|MaxPower|MaxEnergy|Overtemp|Light|Knx|Display|Wemo|Hue|Retry|Remote|Shutter|"
                                       "Thermostat|Chat|TCL|Berry|File";
 
+// from i18n.h
+#define D_CMND_DEVGROUPSTATUS "DevGroupStatus"
 
 // from tasmota_globals.h
 #ifdef USE_DEVICE_GROUPS
@@ -72,6 +74,13 @@ bool first_device_group_is_local = true;
 #endif  // USE_DEVICE_GROUPS
 
 // from settings.h
+typedef union {
+  uint32_t data;                           // Allow bit manipulation using SetOption
+  struct {                                 // SetOption82 .. SetOption113
+    uint32_t device_groups_enabled : 1;    // bit 3 (v8.1.0.9)   - SetOption85  - (DevGroups) Enable Device Groups (1)
+    uint32_t multiple_device_groups : 1;   // bit 6 (v8.1.0.9)   - SetOption88  - (DevGroups) Enable relays in separate device groups/PWM Dimmer Buttons control remote devices (1)
+  };
+} SOBitfield4;
 
 struct XDRVMAILBOX {
   bool          grpflg;
@@ -85,25 +94,28 @@ struct XDRVMAILBOX {
   char         *command;
 } XdrvMailbox;
 
-// tasmota.ino
-
+//
+// modified from tasmota.ino
+//
 struct TasmotaGlobal_t {
   bool skip_light_fade = false;                     // Temporarily skip light fading
-  uint8_t devices_present = 8;                  // Max number of devices supported
+  uint8_t devices_present = 20;                  // Max number of devices supported
   power_t power;                            // Current copy of Settings->power
+  uint8_t restart_flag = 0;                     // Tasmota restart flag
 } TasmotaGlobal;
 
 typedef struct {
+  SOBitfield4   flag4;                     // EF8
   uint8_t       device_group_tie[4];       // FB0
+  uint32_t      device_group_share_in;     // FCC  Bitmask of device group items imported
+  uint32_t      device_group_share_out;    // FD0  Bitmask of device group items exported
 } TSettings;
 
 TSettings* Settings = nullptr;
 
-
-
-
-// support_tasmota.ino
-
+//
+// modified from support_tasmota.ino
+//
 void ExecuteCommandPower(uint32_t device, uint32_t state, uint32_t source)
 {
   power_t mask = 1 << (device -1);        // Device to control
@@ -119,6 +131,15 @@ void ExecuteCommandPower(uint32_t device, uint32_t state, uint32_t source)
       TasmotaGlobal.power ^= mask;
     }
   }
+  ehdgr_power_1 = TasmotaGlobal.power & (1 << (1 - 1));
+  ehdgr_power_2 = TasmotaGlobal.power & (1 << (2 - 1));
+  ehdgr_power_3 = TasmotaGlobal.power & (1 << (3 - 1));
+  ehdgr_power_4 = TasmotaGlobal.power & (1 << (4 - 1));
+  ehdgr_power_5 = TasmotaGlobal.power & (1 << (5 - 1));
+  ehdgr_power_6 = TasmotaGlobal.power & (1 << (6 - 1));
+  ehdgr_power_7 = TasmotaGlobal.power & (1 << (7 - 1));
+  ehdgr_power_8 = TasmotaGlobal.power & (1 << (8 - 1));
+  ehdgr_power_9 = TasmotaGlobal.power & (1 << (9 - 1));
 }
 
 void ExecuteCommand(const char *cmnd, uint32_t source)
@@ -138,15 +159,58 @@ enum XsnsFunctions {FUNC_SETTINGS_OVERRIDE, FUNC_PIN_STATE, FUNC_MODULE_INIT, FU
                     FUNC_WEB_ADD_HANDLER, FUNC_SET_CHANNELS, FUNC_SET_SCHEME, FUNC_HOTPLUG_SCAN,
                     FUNC_DEVICE_GROUP_ITEM };
 
-
 bool XdrvCall(uint8_t Function)
 {
   bool result = false;
   return result;
 }
 
-
 int Response_P(const char* format, ...)        // Content send snprintf_P char data
 {
   return 0;
+}
+
+bool _SendDeviceGroupMessage(int32_t device, DevGroupMessageType message_type, ...);
+
+void InitTasmotaCompatibility()
+{
+  Settings = (TSettings*)malloc(sizeof(TSettings));
+  Settings->device_group_share_in = 0xFFFFFFFF; 
+  Settings->device_group_share_out = 0x00000000;
+  Settings->flag4.device_groups_enabled = 1;
+  Settings->flag4.multiple_device_groups = 0;
+}
+
+enum LoggingLevels {LOG_LEVEL_NONE, LOG_LEVEL_ERROR, LOG_LEVEL_INFO, LOG_LEVEL_DEBUG, LOG_LEVEL_DEBUG_MORE, LOG_LEVEL_ALL};
+
+void AddLogData(uint32_t loglevel, const char* log_data) {
+  if (loglevel == LOG_LEVEL_ERROR) {
+    ESP_LOGE("DGR", "%s", log_data);
+  } else if (loglevel == LOG_LEVEL_INFO)
+  {
+    ESP_LOGW("DGR", "%s", log_data);
+  } else if (loglevel == LOG_LEVEL_DEBUG)
+  {
+    ESP_LOGI("DGR", "%s", log_data);
+  } else if (loglevel == LOG_LEVEL_DEBUG_MORE)
+  {
+    ESP_LOGD("DGR", "%s", log_data);
+  }
+}
+
+void AddLog(uint32_t loglevel, const char*  formatP, ...) {
+  va_list arg;
+  va_start(arg, formatP);
+  if (loglevel == LOG_LEVEL_ERROR) {
+    esp_log_vprintf_(ESPHOME_LOG_LEVEL_ERROR, "DGR", __LINE__, formatP, arg);
+  } else if (loglevel == LOG_LEVEL_INFO)
+  {
+    esp_log_vprintf_(ESPHOME_LOG_LEVEL_WARN, "DGR", __LINE__, formatP, arg);
+  } else if (loglevel == LOG_LEVEL_DEBUG)
+  {
+    esp_log_vprintf_(ESPHOME_LOG_LEVEL_INFO, "DGR", __LINE__, formatP, arg);
+  } else if (loglevel == LOG_LEVEL_DEBUG_MORE)
+  {
+    esp_log_vprintf_(ESPHOME_LOG_LEVEL_DEBUG, "DGR", __LINE__, formatP, arg);
+  }
 }
