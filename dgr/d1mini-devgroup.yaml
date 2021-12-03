@@ -1,0 +1,117 @@
+substitutions:
+  friendly_name: d1mini devgroup
+
+esphome:
+  name: d1mini-devgroup
+  platform: ESP8266
+  board: d1_mini
+  includes:
+    - device_groups_reqs.h
+    - device_groups.h
+    
+logger:
+  logs:
+    script: INFO
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret d1minidevgroup_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+output:
+  - platform: esp8266_pwm
+    pin: GPIO5
+    id: pwm_pin
+
+script:
+  - id: start_and_loop_dev_group
+    mode: restart
+    then:
+      - lambda: |-
+          // do the device group things
+          DeviceGroupsStart();
+          DeviceGroupsLoop();
+      - lambda: |-
+          // update light 1 state
+          static bool state_1 = id(my_light).current_values.get_state();
+          static int brightness_1 = id(my_light).current_values.get_brightness()*255;
+          
+          bool n_state_1 = (bool)((TasmotaGlobal.power >> 0) & 0x1);
+          
+          bool set_state_on  = false;
+          bool set_state_off = false;
+          bool set_brightness = false;
+          
+          if (state_1 != n_state_1) {
+            if (n_state_1) {
+              set_state_on = true;
+            } else {
+              set_state_off = true;
+            }
+          }
+          if (brightness_1 != ehdgr_brightness) {
+            set_brightness = true;
+          }
+          
+          brightness_1 = ehdgr_brightness;
+          state_1 = n_state_1;
+          
+          if (set_state_on || set_brightness) {
+            auto call = id(my_light).turn_on();
+            call.set_brightness((float)brightness_1/255.0f);
+            call.set_transition_length(0);
+            call.perform();
+          }
+          
+          if (set_state_off) {
+            auto call = id(my_light).turn_off();
+            call.set_transition_length(0);
+            call.perform();
+          }
+      - delay: 50ms
+      - script.execute: start_and_loop_dev_group
+  
+  - id: stop_dev_group
+    mode: single
+    then:
+      - script.stop: start_and_loop_dev_group
+      - lambda: |-
+          DeviceGroupsStop();
+
+switch:
+  - platform: template
+    name: "SO85"
+    lambda: |-
+      if (id(start_and_loop_dev_group).is_running()) {
+        return true;
+      } else {
+        return false;
+      }
+    turn_on_action:
+      - script.execute: start_and_loop_dev_group
+    turn_off_action:
+      - script.execute: stop_dev_group
+    # restore_state: true
+
+light:
+  - platform: monochromatic
+    name: $friendly_name
+    id: my_light
+    output: pwm_pin
