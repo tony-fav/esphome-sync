@@ -1,0 +1,224 @@
+substitutions:
+  friendly_name: Eight Channel AC Dimmer
+
+esphome:
+  name: eight-channel-ac-dimmer
+  platform: ESP8266
+  board: d1_mini
+  libraries:
+    - ESP8266WiFi
+    - ESPAsyncE131
+  includes:
+    - E131.h
+# 'E131.h' is a file in my esphome folder that is just one line with:
+# #include <ESPAsyncE131.h>
+# so that ESPHome actually includes the library.
+# E131 implementation based on Forkineye's library and example.
+
+# THIS WORKS BUT TAXES THE ESP8266. ESP32 is suggested.
+
+logger:
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret eightchannelacdimmer_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+output:
+  - platform: ac_dimmer
+    id: dimmer1
+    gate_pin: D7
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer2
+    gate_pin: D6
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer3
+    gate_pin: D3
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer4
+    gate_pin: D8
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer5
+    gate_pin: D0
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer6
+    gate_pin: D1
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer7
+    gate_pin: D5
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+  - platform: ac_dimmer
+    id: dimmer8
+    gate_pin: D4
+    zero_cross_pin:
+      number: D2
+      mode: INPUT
+      inverted: yes
+
+light:
+  - platform: monochromatic
+    output: dimmer1
+    name: Dimmerized Light
+    id: strand1
+    effects:
+      - lambda:
+          name: E131
+          update_interval: 0s
+          lambda: |-
+            // use statics like Arduino declarations at the very top
+            static int state = 0;
+            static float scaled_r = 0.0;
+            static float scaled_g = 0.0;
+            static float scaled_b = 0.0;
+            static ESPAsyncE131 e131(1); // 1 universe
+            
+            // use state == 0 like setup() then state == 1 like loop()
+            if (state == 0) {
+              if (e131.begin(E131_MULTICAST, 1, 1))
+                state = 1;
+              else
+                return;
+            }
+            
+            if (e131.isEmpty()) return;
+              
+            e131_packet_t packet;
+            e131.pull(&packet);
+            
+            float b1 = (float)packet.property_values[1]/255.0f;
+            auto call1 = id(strand1).turn_on();
+            call1.set_transition_length(0);
+            call1.set_brightness(b1); 
+            call1.set_publish(false);
+            call1.set_save(false);
+            
+            float b2 = (float)packet.property_values[2]/255.0f;
+            auto call2 = id(strand2).turn_on();
+            call2.set_transition_length(0);
+            call2.set_brightness(b2); 
+            call2.set_publish(false);
+            call2.set_save(false);
+            
+            float b3 = (float)packet.property_values[3]/255.0f;
+            auto call3 = id(strand3).turn_on();
+            call3.set_transition_length(0);
+            call3.set_brightness(b3); 
+            call3.set_publish(false);
+            call3.set_save(false);
+            
+            float b4 = (float)packet.property_values[4]/255.0f;
+            auto call4 = id(strand4).turn_on();
+            call4.set_transition_length(0);
+            call4.set_brightness(b4); 
+            call4.set_publish(false);
+            call4.set_save(false);
+            
+            float b5 = (float)packet.property_values[5]/255.0f;
+            auto call5 = id(strand5).turn_on();
+            call5.set_transition_length(0);
+            call5.set_brightness(b5); 
+            call5.set_publish(false);
+            call5.set_save(false);
+            
+            float b6 = (float)packet.property_values[6]/255.0f;
+            auto call6 = id(strand6).turn_on();
+            call6.set_transition_length(0);
+            call6.set_brightness(b6); 
+            call6.set_publish(false);
+            call6.set_save(false);
+            
+            float b7 = (float)packet.property_values[7]/255.0f;
+            auto call7 = id(strand7).turn_on();
+            call7.set_transition_length(0);
+            call7.set_brightness(b7); 
+            call7.set_publish(false);
+            call7.set_save(false);
+            
+            float b8 = (float)packet.property_values[8]/255.0f;
+            auto call8 = id(strand8).turn_on();
+            call8.set_transition_length(0);
+            call8.set_brightness(b8); 
+            call8.set_publish(false);
+            call8.set_save(false);
+            
+            call1.perform();
+            call2.perform();
+            call3.perform();
+            call4.perform();
+            call5.perform();
+            call6.perform();
+            call7.perform();
+            call8.perform();
+
+  - platform: monochromatic
+    output: dimmer2
+    name: Dimmerized Light2
+    id: strand2
+  - platform: monochromatic
+    output: dimmer3
+    name: Dimmerized Light3
+    id: strand3
+  - platform: monochromatic
+    output: dimmer4
+    name: Dimmerized Light4
+    id: strand4
+  - platform: monochromatic
+    output: dimmer5
+    name: Dimmerized Light5
+    id: strand5
+  - platform: monochromatic
+    output: dimmer6
+    name: Dimmerized Light6
+    id: strand6
+  - platform: monochromatic
+    output: dimmer7
+    name: Dimmerized Light7
+    id: strand7
+  - platform: monochromatic
+    output: dimmer8
+    name: Dimmerized Light8
+    id: strand8
