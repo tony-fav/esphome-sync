@@ -7,12 +7,21 @@ esphome:
   board: d1_mini
   includes:
     - d1mini-devgroup.h     # #define statements for this device
+<<<<<<< HEAD
     - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
     - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
   on_boot:
     priority: -100
     then:
       - script.execute: start_and_loop_dev_group
+=======
+    - device_groups_reqs.h
+    - device_groups.h
+  # on_boot:
+  #   priority: -100
+  #   then:
+  #     - script.execute: start_and_loop_dev_group
+>>>>>>> 93b04d1982ec9c308a3303fe5a09b49b67adb742
       
     
 logger:
