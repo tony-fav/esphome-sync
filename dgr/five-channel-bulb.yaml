@@ -1,0 +1,375 @@
+substitutions:
+  friendly_name: Five Channel Bulb
+
+esphome:
+  name: five-channel-bulb
+  platform: ESP8266
+  board: esp01_1m
+  libraries:
+    - ESP8266WiFi
+    - ESPAsyncE131
+  includes:
+    - five-channel-bulb.h                   # #define statements for this device
+    - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
+    - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
+    - E131.h
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: dgr_start
+  on_loop:
+    then:
+      - if:
+          condition:
+            switch.is_on: use_dgr
+          then:
+            script.execute: dgr_loop
+      - if:
+          condition:
+            switch.is_on: use_ddp
+          then:
+            script.execute: ddp_loop
+      - if:
+          condition:
+            switch.is_on: use_e131
+          then:
+            script.execute: e131_loop
+
+logger:
+  logs:
+    script: INFO
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret fivechannelbulb_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+globals:
+  - id: dgr_restart
+    type: int
+    initial_value: '1'
+  - id: ddp_udp
+    type: WiFiUDP
+  - id: ddp_udp_up
+    type: int
+    initial_value: '0'
+
+script:
+  - id: dgr_start
+    mode: single
+    then:
+      - lambda: |-
+          InitTasmotaCompatibility();
+  - id: dgr_loop
+    mode: single
+    then:
+      - lambda: |-
+          DeviceGroupsStart();
+          DeviceGroupsLoop();
+      - lambda: |-
+          // debug messages
+          static unsigned long last_output_time = millis();
+          if (millis() < last_output_time + 10000) return;
+          last_output_time = millis();
+          ESP_LOGI("DGR", "Pr: %d - B: %d - C: %d, %d, %d, %d, %d - F: %d - Sp: %d - Sc: %d", 
+          EHDGR1.power_state, EHDGR1.brightness,
+          EHDGR1.channel_1, EHDGR1.channel_2, EHDGR1.channel_3, EHDGR1.channel_4, EHDGR1.channel_5,
+          EHDGR1.fade, EHDGR1.speed, EHDGR1.scheme);
+      - lambda: |-
+          // update light 1 state
+          static bool state = id(my_light).current_values.get_state();
+          static int brightness = id(my_light).current_values.get_brightness()*255;
+          static int c1 = id(my_light).current_values.get_red()*255;
+          static int c2 = id(my_light).current_values.get_green()*255;
+          static int c3 = id(my_light).current_values.get_blue()*255;
+          static int c4 = id(my_light).current_values.get_cold_white()*255;
+          static int c5 = id(my_light).current_values.get_warm_white()*255;
+          
+          if (id(dgr_restart))
+          {
+            state = id(my_light).current_values.get_state();
+            brightness = id(my_light).current_values.get_brightness()*255;
+            c1 = id(my_light).current_values.get_red()*255;
+            c2 = id(my_light).current_values.get_green()*255;
+            c3 = id(my_light).current_values.get_blue()*255;
+            c4 = id(my_light).current_values.get_cold_white()*255;
+            c5 = id(my_light).current_values.get_warm_white()*255;
+            id(dgr_restart) = 0;
+          }
+          
+          bool set_state_on  = false;
+          bool set_state_off = false;
+          bool set_brightness = false;
+          
+          bool n_state = EHDGR_PowerStateFromIndex(EHDGR1, 1);
+          
+          if (state != n_state) {
+            if (n_state) {
+              set_state_on = true;
+            } else {
+              set_state_off = true;
+            }
+          }
+          if (n_state && (brightness != EHDGR1.brightness)) {
+            set_state_on = true;
+          }
+          if (n_state && (c1 != EHDGR1.channel_1)) {
+            set_state_on = true;
+          }
+          if (n_state && (c2 != EHDGR1.channel_2)) {
+            set_state_on = true;
+          }
+          if (n_state && (c3 != EHDGR1.channel_3)) {
+            set_state_on = true;
+          }
+          if (n_state && (c4 != EHDGR1.channel_4)) {
+            set_state_on = true;
+          }
+          if (n_state && (c5 != EHDGR1.channel_5)) {
+            set_state_on = true;
+          }
+          
+          if (set_state_on) {
+            int tt = 500*abs(state*brightness - EHDGR1.brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
+          
+            brightness = EHDGR1.brightness;
+            c1 = EHDGR1.channel_1;
+            c2 = EHDGR1.channel_2;
+            c3 = EHDGR1.channel_3;
+            c4 = EHDGR1.channel_4;
+            c5 = EHDGR1.channel_5;
+            state = true;
+            
+            int m = 0;
+            if ( (c1>=c2) && (c1>=c3) ) { m = c1; }
+            else if ( c2 >= c3 )        { m = c2; }
+            else                        { m = c3; }
+            
+            auto call = id(my_light).turn_on();
+            call.set_brightness((float)brightness/255.0f);
+            call.set_red((float)c1/255.0f);
+            call.set_green((float)c2/255.0f);
+            call.set_blue((float)c3/255.0f);
+            call.set_color_brightness((float)m/255.0f);
+            call.set_cold_white((float)c4/255.0f);
+            call.set_warm_white((float)c5/255.0f);
+            call.set_transition_length(tt);
+            call.perform();
+          }
+          
+          if (set_state_off) {
+            int tt = 500*abs(brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
+            
+            state = false;
+            
+            auto call = id(my_light).turn_off();
+            call.set_transition_length(tt);
+            call.perform();
+          }
+  - id: dgr_end
+    mode: single
+    then:
+      - lambda: |-
+          DeviceGroupsStop();
+          id(dgr_restart) = 1;
+  - id: ddp_loop
+    mode: single
+    then:
+      - lambda: |-
+          // allocate and start UDP
+          if (!id(ddp_udp_up)) {
+            if (!id(ddp_udp).begin(4048)) {   // always listen on DDP port
+              return;
+            }
+            id(ddp_udp_up) = 1;
+          }
+          
+          // read UDP payload
+          std::vector<uint8_t> payload;
+          while (uint16_t packet_size = id(ddp_udp).parsePacket()) {
+            payload.resize(packet_size);
+            if (!id(ddp_udp).read(&payload[0], payload.size())) {
+              continue;
+            }
+          }
+      
+          // ignore small payload
+          if (payload.size() < 2) {
+            return;
+          }
+
+          // do the thing
+          float r = (float)payload[10]/255.0f;
+          float g = (float)payload[11]/255.0f;
+          float b = (float)payload[12]/255.0f;
+          
+          float m = 0.0f;
+          if ( (r>=g) && (r>=b) ) { m = r; }
+          else if ( g >= b )      { m = g; }
+          else                    { m = b; }
+          
+          float scaled_r = 0.0;
+          float scaled_g = 0.0;
+          float scaled_b = 0.0;
+          
+          if (m != 0.0f) {
+            scaled_r = r/m;
+            scaled_g = g/m;
+            scaled_b = b/m;
+          } else {
+            scaled_r = 0.0f;
+            scaled_g = 0.0f;
+            scaled_b = 0.0f;
+          }
+          
+          auto call = id(my_light).turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(m);
+          call.set_rgb(scaled_r, scaled_g, scaled_b);
+          call.set_color_brightness(1.0f);
+          call.set_cold_white(0.0f);
+          call.set_warm_white(0.0f);
+          call.set_publish(false);
+          call.set_save(false);
+          call.perform();
+  - id: ddp_end
+    mode: single
+    then:
+      - lambda: |-
+          if (id(ddp_udp_up)) {
+            id(ddp_udp).flush();
+            id(ddp_udp_up) = 0;
+          }
+  - id: e131_loop
+    mode: single
+    then:
+        lambda: |-
+          // use statics like Arduino declarations at the very top
+          static int state = 0;
+          static ESPAsyncE131 e131(1); // 1 universe
+          
+          // use state == 0 like setup() then state == 1 like loop()
+          if (state == 0) {
+            if (e131.begin(E131_MULTICAST, 1, 1))
+              state = 1;
+            else
+              return;
+          }
+          
+          if (e131.isEmpty()) return;
+            
+          e131_packet_t packet;
+          e131.pull(&packet);
+          
+          // do the thing
+          float r = (float)packet.property_values[1]/255.0f;
+          float g = (float)packet.property_values[2]/255.0f;
+          float b = (float)packet.property_values[3]/255.0f;
+          
+          float m = 0.0f;
+          if ( (r>=g) && (r>=b) ) { m = r; }
+          else if ( g >= b )      { m = g; }
+          else                    { m = b; }
+          
+          float scaled_r = 0.0;
+          float scaled_g = 0.0;
+          float scaled_b = 0.0;
+          
+          if (m != 0.0f) {
+            scaled_r = r/m;
+            scaled_g = g/m;
+            scaled_b = b/m;
+          } else {
+            scaled_r = 0.0f;
+            scaled_g = 0.0f;
+            scaled_b = 0.0f;
+          }
+          
+          auto call = id(my_light).turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(m); 
+          call.set_rgb(scaled_r, scaled_g, scaled_b);
+          call.set_color_brightness(1.0f);
+          call.set_cold_white(0.0f);
+          call.set_warm_white(0.0f);
+          call.set_publish(false);
+          call.set_save(false);
+          call.perform();
+
+switch:
+  - platform: template
+    id: use_dgr
+    name: "${friendly_name} DGR"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_ddp
+      - switch.turn_off: use_e131
+    on_turn_off:
+      - script.execute: dgr_end
+    
+  - platform: template
+    id: use_ddp
+    name: "${friendly_name} DDP"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_dgr
+      - switch.turn_off: use_e131
+    on_turn_off:
+      - script.execute: ddp_end
+    
+  - platform: template
+    id: use_e131
+    name: "${friendly_name} E131"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_dgr
+      - switch.turn_off: use_ddp
+
+output:
+  - platform: esp8266_pwm
+    pin: GPIO4
+    id: pwm_red
+  - platform: esp8266_pwm
+    pin: GPIO12
+    id: pwm_green
+  - platform: esp8266_pwm
+    pin: GPIO14
+    id: pwm_blue
+    max_power: 0.6
+  - platform: esp8266_pwm
+    pin: GPIO5
+    id: pwm_cw
+  - platform: esp8266_pwm
+    pin: GPIO13
+    id: pwm_ww
+
+light:
+  - platform: rgbww
+    name: "${friendly_name} Light"
+    id: my_light
+    red: pwm_red
+    green: pwm_green
+    blue: pwm_blue
+    cold_white: pwm_cw
+    warm_white: pwm_ww
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+    # color_interlock: true # RGB or CCT
+    # constant_brightness: true # Brightness & Temp NOT Cool White Bright & Warm White Bright
