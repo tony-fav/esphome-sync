@@ -6,21 +6,20 @@
 
 const uint8_t MAX_RELAYS = 20;
 
-bool ehdgr_power_1 = false;
-bool ehdgr_power_2 = false;
-bool ehdgr_power_3 = false;
-bool ehdgr_power_4 = false;
-bool ehdgr_power_5 = false;
-bool ehdgr_power_6 = false;
-bool ehdgr_power_7 = false;
-bool ehdgr_power_8 = false;
-bool ehdgr_power_9 = false;
-uint8_t ehdgr_brightness = 0;
-uint8_t ehdgr_channel_1 = 0;
-uint8_t ehdgr_channel_2 = 0;
-uint8_t ehdgr_channel_3 = 0;
-uint8_t ehdgr_channel_4 = 0;
-uint8_t ehdgr_channel_5 = 0;
+typedef struct {
+  unsigned long power_state = 0;
+  bool fade = false;
+  uint8_t speed = false;
+  uint8_t scheme = 0;
+  uint8_t brightness = 0;
+  uint8_t channel_1 = 0;
+  uint8_t channel_2 = 0;
+  uint8_t channel_3 = 0;
+  uint8_t channel_4 = 0;
+  uint8_t channel_5 = 0;
+} DGRState;
+
+DGRState EHDGR1;
 
 // from tasmota.h
 typedef unsigned long power_t;              // Power (Relay) type
@@ -131,15 +130,7 @@ void ExecuteCommandPower(uint32_t device, uint32_t state, uint32_t source)
       TasmotaGlobal.power ^= mask;
     }
   }
-  ehdgr_power_1 = TasmotaGlobal.power & (1 << (1 - 1));
-  ehdgr_power_2 = TasmotaGlobal.power & (1 << (2 - 1));
-  ehdgr_power_3 = TasmotaGlobal.power & (1 << (3 - 1));
-  ehdgr_power_4 = TasmotaGlobal.power & (1 << (4 - 1));
-  ehdgr_power_5 = TasmotaGlobal.power & (1 << (5 - 1));
-  ehdgr_power_6 = TasmotaGlobal.power & (1 << (6 - 1));
-  ehdgr_power_7 = TasmotaGlobal.power & (1 << (7 - 1));
-  ehdgr_power_8 = TasmotaGlobal.power & (1 << (8 - 1));
-  ehdgr_power_9 = TasmotaGlobal.power & (1 << (9 - 1));
+  EHDGR1.power_state = TasmotaGlobal.power;
 }
 
 void ExecuteCommand(const char *cmnd, uint32_t source)
@@ -213,4 +204,9 @@ void AddLog(uint32_t loglevel, const char*  formatP, ...) {
   {
     esp_log_vprintf_(ESPHOME_LOG_LEVEL_DEBUG, "DGR", __LINE__, formatP, arg);
   }
+}
+
+bool EHDGR_PowerStateFromIndex(DGRState state, uint8_t idx)
+{
+  return (state.power_state & (1 << (idx - 1)));
 }

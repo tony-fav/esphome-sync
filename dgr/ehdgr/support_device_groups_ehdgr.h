@@ -137,7 +137,6 @@ void DeviceGroupsInit(void)
   
 */
   device_group_count = 1;
-  // device_group_count = 4;
   // Initialize the device information for each device group.
   device_groups = (struct device_group *)calloc(device_group_count, sizeof(struct device_group));
   if (!device_groups) {
@@ -161,16 +160,7 @@ void DeviceGroupsInit(void)
     */
     if (device_group_index == 0) {
       strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_1);
-    } 
-    // else if (device_group_index == 1) {
-    //   strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_2);
-    // } 
-    // else if (device_group_index == 2) {
-    //   strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_3);
-    // } 
-    // else if (device_group_index == 3) {
-    //   strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_4);
-    // }
+    }
     device_group->message_header_length = sprintf_P((char *)device_group->message, PSTR("%s%s"), kDeviceGroupMessage, device_group->group_name) + 1;
     device_group->no_status_share = 0;
     device_group->last_full_status_sequence = -1;
@@ -449,15 +439,24 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
           case DGR_ITEM_COMMAND:
             ExecuteCommand(XdrvMailbox.data, SRC_REMOTE);
             break;
+          case DGR_ITEM_LIGHT_FADE:
+            EHDGR1.fade = (bool)value;
+            break;
+          case DGR_ITEM_LIGHT_SPEED:
+            EHDGR1.speed = (uint8_t)value;
+            break;
+          case DGR_ITEM_LIGHT_SCHEME:
+            EHDGR1.scheme = (uint8_t)value;
+            break;
           case DGR_ITEM_LIGHT_BRI:
-            ehdgr_brightness = value;
+            EHDGR1.brightness = (uint8_t)value;
             break;
           case DGR_ITEM_LIGHT_CHANNELS:
-            ehdgr_channel_1 = (uint8_t)XdrvMailbox.data[0];
-            ehdgr_channel_2 = (uint8_t)XdrvMailbox.data[1];
-            ehdgr_channel_3 = (uint8_t)XdrvMailbox.data[2];
-            ehdgr_channel_4 = (uint8_t)XdrvMailbox.data[3];
-            ehdgr_channel_5 = (uint8_t)XdrvMailbox.data[4];
+            EHDGR1.channel_1 = (uint8_t)XdrvMailbox.data[0];
+            EHDGR1.channel_2 = (uint8_t)XdrvMailbox.data[1];
+            EHDGR1.channel_3 = (uint8_t)XdrvMailbox.data[2];
+            EHDGR1.channel_4 = (uint8_t)XdrvMailbox.data[3];
+            EHDGR1.channel_5 = (uint8_t)XdrvMailbox.data[4];
             break;
         }
         XdrvCall(FUNC_DEVICE_GROUP_ITEM);

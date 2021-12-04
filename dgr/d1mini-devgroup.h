@@ -1,4 +1,1 @@
 #define EH_DEVICE_GROUP_NAME_1 "EHTest1"
-#define EH_DEVICE_GROUP_NAME_2 "EHTest2"
-#define EH_DEVICE_GROUP_NAME_3 "EHTest3"
-#define EH_DEVICE_GROUP_NAME_4 "EHTest4"
