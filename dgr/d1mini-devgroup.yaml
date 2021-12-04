@@ -5,25 +5,36 @@ esphome:
   name: d1mini-devgroup
   platform: ESP8266
   board: d1_mini
+  libraries:
+    - ESP8266WiFi
+    - ESPAsyncE131
   includes:
     - d1mini-devgroup.h     # #define statements for this device
-<<<<<<< HEAD
     - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
     - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
+    - E131.h
   on_boot:
     priority: -100
     then:
-      - script.execute: start_and_loop_dev_group
-=======
-    - device_groups_reqs.h
-    - device_groups.h
-  # on_boot:
-  #   priority: -100
-  #   then:
-  #     - script.execute: start_and_loop_dev_group
->>>>>>> 93b04d1982ec9c308a3303fe5a09b49b67adb742
-      
-    
+      - script.execute: dgr_start
+  on_loop:
+    then:
+      - if:
+          condition:
+            switch.is_on: use_dgr
+          then:
+            script.execute: dgr_loop
+      - if:
+          condition:
+            switch.is_on: use_ddp
+          then:
+            script.execute: ddp_loop
+      - if:
+          condition:
+            switch.is_on: use_e131
+          then:
+            script.execute: e131_loop
+
 logger:
   logs:
     script: INFO
@@ -55,17 +66,23 @@ output:
     pin: GPIO5
     id: pwm_pin
 
+globals:
+  - id: ddp_udp
+    type: WiFiUDP
+  - id: ddp_udp_up
+    type: int
+    initial_value: '0'
+
 script:
-  - id: start_and_loop_dev_group
-    mode: restart
+  - id: dgr_start
+    mode: single
     then:
       - lambda: |-
-          // do the device group things
-          static int state = 0;
-          if (state == 0) {
-            InitTasmotaCompatibility();
-            state = 1;
-          }
+          InitTasmotaCompatibility();
+  - id: dgr_loop
+    mode: single
+    then:
+      - lambda: |-
           DeviceGroupsStart();
           DeviceGroupsLoop();
       - lambda: |-
@@ -73,80 +90,206 @@ script:
           static unsigned long last_output_time = millis();
           if (millis() < last_output_time + 10000) return;
           last_output_time = millis();
-          ESP_LOGI("DGR", "%d, %d, %d, %d, %d, %d, %d, %d, %d - %d - %d, %d, %d, %d, %d", 
-          ehdgr_power_1,  ehdgr_power_2,  ehdgr_power_3,  
-          ehdgr_power_4,  ehdgr_power_5,  ehdgr_power_6,  
-          ehdgr_power_7,  ehdgr_power_8,  ehdgr_power_9,
-          ehdgr_brightness,
-          ehdgr_channel_1, ehdgr_channel_2, ehdgr_channel_3, ehdgr_channel_4, ehdgr_channel_5);
+          ESP_LOGI("DGR", "Pr: %d - B: %d - C: %d, %d, %d, %d, %d - F: %d - Sp: %d - Sc: %d", 
+          EHDGR1.power_state, EHDGR1.brightness,
+          EHDGR1.channel_1, EHDGR1.channel_2, EHDGR1.channel_3, EHDGR1.channel_4, EHDGR1.channel_5,
+          EHDGR1.fade, EHDGR1.speed, EHDGR1.scheme);
       - lambda: |-
           // update light 1 state
           static bool state = id(my_light).current_values.get_state();
           static int brightness = id(my_light).current_values.get_brightness()*255;
           
-          if (!id(use_dgr).state) return;
-          
           bool set_state_on  = false;
           bool set_state_off = false;
           bool set_brightness = false;
           
-          if (state != ehdgr_power_9) {
-            if (ehdgr_power_9) {
+          bool n_state = EHDGR_PowerStateFromIndex(EHDGR1, 9);
+          
+          if (state != n_state) {
+            if (n_state) {
               set_state_on = true;
             } else {
               set_state_off = true;
             }
           }
-          if (ehdgr_power_9 && (brightness != ehdgr_brightness)) {
+          if (n_state && (brightness != EHDGR1.brightness)) {
             set_brightness = true;
           }
           
           if (set_state_on || set_brightness) {
-            brightness = ehdgr_brightness;
+            int tt = 500*abs(state*brightness - EHDGR1.brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
+          
+            brightness = EHDGR1.brightness;
             state = true;
             
             auto call = id(my_light).turn_on();
             call.set_brightness((float)brightness/255.0f);
-            call.set_transition_length(0);
+            call.set_transition_length(tt);
             call.perform();
           }
           
           if (set_state_off) {
+            int tt = 500*abs(brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
+            
             state = false;
             
             auto call = id(my_light).turn_off();
-            call.set_transition_length(0);
+            call.set_transition_length(tt);
             call.perform();
           }
-      - delay: 50ms
-      - script.execute: start_and_loop_dev_group
-  
-  - id: stop_dev_group
+  - id: dgr_end
     mode: single
     then:
-      - script.stop: start_and_loop_dev_group
       - lambda: |-
           DeviceGroupsStop();
+  - id: ddp_loop
+    mode: single
+    then:
+      - lambda: |-
+          // allocate and start UDP
+          if (!id(ddp_udp_up)) {
+            if (!id(ddp_udp).begin(4048)) {   // always listen on DDP port
+              return;
+            }
+            id(ddp_udp_up) = 1;
+          }
+          
+          // read UDP payload
+          std::vector<uint8_t> payload;
+          while (uint16_t packet_size = id(ddp_udp).parsePacket()) {
+            payload.resize(packet_size);
+            if (!id(ddp_udp).read(&payload[0], payload.size())) {
+              continue;
+            }
+          }
+      
+          // ignore small payload
+          if (payload.size() < 2) {
+            return;
+          }
+
+          // do the thing
+          float r = (float)payload[10]/255.0f;
+          float g = (float)payload[11]/255.0f;
+          float b = (float)payload[12]/255.0f;
+          
+          float m = 0.0f;
+          if ( (r>=g) && (r>=b) ) { m = r; }
+          else if ( g >= b )      { m = g; }
+          else                    { m = b; }
+          
+          float scaled_r = 0.0;
+          float scaled_g = 0.0;
+          float scaled_b = 0.0;
+          
+          if (m != 0.0f) {
+            scaled_r = r/m;
+            scaled_g = g/m;
+            scaled_b = b/m;
+          } else {
+            scaled_r = 0.0f;
+            scaled_g = 0.0f;
+            scaled_b = 0.0f;
+          }
+          
+          auto call = id(my_light).turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(r); 
+          // call.set_color_mode(ColorMode::RGB);
+          // call.set_rgb(scaled_r, scaled_g, scaled_b);
+          call.set_publish(false);
+          call.set_save(false);
+          call.perform();
+  - id: ddp_end
+    mode: single
+    then:
+      - lambda: |-
+          if (id(ddp_udp_up)) {
+            id(ddp_udp).flush();
+            id(ddp_udp_up) = 0;
+          }
+  - id: e131_loop
+    mode: single
+    then:
+        lambda: |-
+          // use statics like Arduino declarations at the very top
+          static int state = 0;
+          static ESPAsyncE131 e131(1); // 1 universe
+          
+          // use state == 0 like setup() then state == 1 like loop()
+          if (state == 0) {
+            if (e131.begin(E131_MULTICAST, 1, 1))
+              state = 1;
+            else
+              return;
+          }
+          
+          if (e131.isEmpty()) return;
+            
+          e131_packet_t packet;
+          e131.pull(&packet);
+          
+          // do the thing
+          float r = (float)packet.property_values[1]/255.0f;
+          float g = (float)packet.property_values[2]/255.0f;
+          float b = (float)packet.property_values[3]/255.0f;
+          
+          float m = 0.0f;
+          if ( (r>=g) && (r>=b) ) { m = r; }
+          else if ( g >= b )      { m = g; }
+          else                    { m = b; }
+          
+          float scaled_r = 0.0;
+          float scaled_g = 0.0;
+          float scaled_b = 0.0;
+          
+          if (m != 0.0f) {
+            scaled_r = r/m;
+            scaled_g = g/m;
+            scaled_b = b/m;
+          } else {
+            scaled_r = 0.0f;
+            scaled_g = 0.0f;
+            scaled_b = 0.0f;
+          }
+          
+          auto call = id(my_light).turn_on();
+          call.set_transition_length(0);
+          call.set_brightness(r); 
+          // call.set_color_mode(ColorMode::RGB);
+          // call.set_rgb(scaled_r, scaled_g, scaled_b);
+          call.set_publish(false);
+          call.set_save(false);
+          call.perform();
 
 switch:
-  - platform: template
-    name: "Enable DGR"
-    id: enable_dgr
-    lambda: |-
-      if (id(start_and_loop_dev_group).is_running()) {
-        return true;
-      } else {
-        return false;
-      }
-    turn_on_action:
-      - script.execute: start_and_loop_dev_group
-    turn_off_action:
-      - script.execute: stop_dev_group
-    
   - platform: template
     id: use_dgr
     name: "Use DGR"
     optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_ddp
+      - switch.turn_off: use_e131
+    on_turn_off:
+      - script.execute: dgr_end
+    
+  - platform: template
+    id: use_ddp
+    name: "Use DDP"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_dgr
+      - switch.turn_off: use_e131
+    on_turn_off:
+      - script.execute: ddp_end
+    
+  - platform: template
+    id: use_e131
+    name: "Use E131"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_dgr
+      - switch.turn_off: use_ddp
 
 light:
   - platform: monochromatic
