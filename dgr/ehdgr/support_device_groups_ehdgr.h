@@ -159,7 +159,7 @@ void DeviceGroupsInit(void)
     }
     */
     if (device_group_index == 0) {
-      strcpy(device_group->group_name, EH_DEVICE_GROUP_NAME_1);
+      strcpy(device_group->group_name, device_group_name);
     }
     device_group->message_header_length = sprintf_P((char *)device_group->message, PSTR("%s%s"), kDeviceGroupMessage, device_group->group_name) + 1;
     device_group->no_status_share = 0;
@@ -440,23 +440,23 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
             ExecuteCommand(XdrvMailbox.data, SRC_REMOTE);
             break;
           case DGR_ITEM_LIGHT_FADE:
-            EHDGR1.fade = (bool)value;
+            EHDGR_State.fade = (bool)value;
             break;
           case DGR_ITEM_LIGHT_SPEED:
-            EHDGR1.speed = (uint8_t)value;
+            EHDGR_State.speed = (uint8_t)value;
             break;
           case DGR_ITEM_LIGHT_SCHEME:
-            EHDGR1.scheme = (uint8_t)value;
+            EHDGR_State.scheme = (uint8_t)value;
             break;
           case DGR_ITEM_LIGHT_BRI:
-            EHDGR1.brightness = (uint8_t)value;
+            EHDGR_State.brightness = (uint8_t)value;
             break;
           case DGR_ITEM_LIGHT_CHANNELS:
-            EHDGR1.channel_1 = (uint8_t)XdrvMailbox.data[0];
-            EHDGR1.channel_2 = (uint8_t)XdrvMailbox.data[1];
-            EHDGR1.channel_3 = (uint8_t)XdrvMailbox.data[2];
-            EHDGR1.channel_4 = (uint8_t)XdrvMailbox.data[3];
-            EHDGR1.channel_5 = (uint8_t)XdrvMailbox.data[4];
+            EHDGR_State.channel_1 = (uint8_t)XdrvMailbox.data[0];
+            EHDGR_State.channel_2 = (uint8_t)XdrvMailbox.data[1];
+            EHDGR_State.channel_3 = (uint8_t)XdrvMailbox.data[2];
+            EHDGR_State.channel_4 = (uint8_t)XdrvMailbox.data[3];
+            EHDGR_State.channel_5 = (uint8_t)XdrvMailbox.data[4];
             break;
         }
         XdrvCall(FUNC_DEVICE_GROUP_ITEM);
