@@ -414,14 +414,13 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
   set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
   set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
   set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_4 != EHDGR_State.channel_4));
   
   if (set_state_on) {
     int td = 0;
     td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
     td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
     td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
-    td = max(td, abs(tstate*tbrightness*tc4 - EHDGR_State.brightness*EHDGR_State.channel_4));
+    td = max(td, abs(tstate*tbrightness*255 - EHDGR_State.brightness*255));
     int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
 
     if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
@@ -437,7 +436,7 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       auto call = id(light).turn_on();
       call.set_brightness((float)EHDGR_State.brightness/255.0f);
       call.set_color_mode(ColorMode::WHITE);
-      call.set_white((float)EHDGR_State.channel_4/255.0f);
+      call.set_white(1.0f);
       call.set_transition_length(tt);
       call.perform();
     }
