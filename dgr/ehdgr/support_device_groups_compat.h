@@ -18,6 +18,7 @@ typedef struct {
   uint8_t channel_4 = 0;
   uint8_t channel_5 = 0;
   uint8_t source = 0;
+  bool recv_light = false;
 } DGRState;
 
 DGRState EHDGR_State;
@@ -340,47 +341,65 @@ void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       set_state_off = true;
     }
   }
-  set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_4 != EHDGR_State.channel_4));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_5 != EHDGR_State.channel_5));
-  
-  if (set_state_on) {
-    int td = 0;
-    td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
-    td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
-    td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
-    td = max(td, abs(tstate*tbrightness*tc4 - EHDGR_State.brightness*EHDGR_State.channel_4));
-    td = max(td, abs(tstate*tbrightness*tc5 - EHDGR_State.brightness*EHDGR_State.channel_5));
-    int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
 
-    if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
-      auto call = id(light).turn_on();
-      call.set_brightness((float)EHDGR_State.brightness/255.0f);
-      call.set_color_mode(ColorMode::RGB);
-      call.set_red((float)EHDGR_State.channel_1/255.0f);
-      call.set_green((float)EHDGR_State.channel_2/255.0f);
-      call.set_blue((float)EHDGR_State.channel_3/255.0f);
-      call.set_transition_length(tt);
-      call.perform();
-    } else {
-      auto call = id(light).turn_on();
-      call.set_brightness((float)EHDGR_State.brightness/255.0f);
-      call.set_color_mode(ColorMode::COLD_WARM_WHITE);
-      call.set_cold_white((float)EHDGR_State.channel_4/255.0f);
-      call.set_warm_white((float)EHDGR_State.channel_5/255.0f);
+  if (EHDGR_State.recv_light)
+  {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_4 != EHDGR_State.channel_4));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_5 != EHDGR_State.channel_5));
+    
+    if (set_state_on) {
+      int td = 0;
+      td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
+      td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
+      td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
+      td = max(td, abs(tstate*tbrightness*tc4 - EHDGR_State.brightness*EHDGR_State.channel_4));
+      td = max(td, abs(tstate*tbrightness*tc5 - EHDGR_State.brightness*EHDGR_State.channel_5));
+      int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
+
+      if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_color_mode(ColorMode::RGB);
+        call.set_red((float)EHDGR_State.channel_1/255.0f);
+        call.set_green((float)EHDGR_State.channel_2/255.0f);
+        call.set_blue((float)EHDGR_State.channel_3/255.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      } else {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_color_mode(ColorMode::COLD_WARM_WHITE);
+        call.set_cold_white((float)EHDGR_State.channel_4/255.0f);
+        call.set_warm_white((float)EHDGR_State.channel_5/255.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      }
+    }
+    
+    if (set_state_off) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_off();
       call.set_transition_length(tt);
       call.perform();
     }
-  }
-  
-  if (set_state_off) {
-    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-    auto call = id(light).turn_off();
-    call.set_transition_length(tt);
-    call.perform();
+  } else {
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_transition_length(tt);
+      call.perform();
+    }
+    
+    if (set_state_off) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_off();
+      call.set_transition_length(tt);
+      call.perform();
+    }
   }
 
   EHDGR_LastLightState = EHDGR_State;
@@ -410,43 +429,61 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       set_state_off = true;
     }
   }
-  set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
-  set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
-  
-  if (set_state_on) {
-    int td = 0;
-    td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
-    td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
-    td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
-    td = max(td, abs(tstate*tbrightness*255 - EHDGR_State.brightness*255));
-    int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
 
-    if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
-      auto call = id(light).turn_on();
-      call.set_brightness((float)EHDGR_State.brightness/255.0f);
-      call.set_color_mode(ColorMode::RGB);
-      call.set_red((float)EHDGR_State.channel_1/255.0f);
-      call.set_green((float)EHDGR_State.channel_2/255.0f);
-      call.set_blue((float)EHDGR_State.channel_3/255.0f);
-      call.set_transition_length(tt);
-      call.perform();
-    } else {
-      auto call = id(light).turn_on();
-      call.set_brightness((float)EHDGR_State.brightness/255.0f);
-      call.set_color_mode(ColorMode::WHITE);
-      call.set_white(1.0f);
+  if (EHDGR_State.recv_light)
+  {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
+    
+    if (set_state_on) {
+      int td = 0;
+      td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
+      td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
+      td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
+      td = max(td, abs(tstate*tbrightness*255 - EHDGR_State.brightness*255));
+      int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
+
+      if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_color_mode(ColorMode::RGB);
+        call.set_red((float)EHDGR_State.channel_1/255.0f);
+        call.set_green((float)EHDGR_State.channel_2/255.0f);
+        call.set_blue((float)EHDGR_State.channel_3/255.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      } else {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_color_mode(ColorMode::WHITE);
+        call.set_white(1.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      }
+    }
+    
+    if (set_state_off) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_off();
       call.set_transition_length(tt);
       call.perform();
     }
-  }
-  
-  if (set_state_off) {
-    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-    auto call = id(light).turn_off();
-    call.set_transition_length(tt);
-    call.perform();
+  } else {
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_transition_length(tt);
+      call.perform();
+    }
+    
+    if (set_state_off) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_off();
+      call.set_transition_length(tt);
+      call.perform();
+    }
   }
 
   EHDGR_LastLightState = EHDGR_State;
