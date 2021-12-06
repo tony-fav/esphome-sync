@@ -9,7 +9,6 @@ esphome:
     - ESP8266WiFi
     - ESPAsyncE131
   includes:
-    - d1mini-devgroup.h     # #define statements for this device
     - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
     - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
     - E131.h
@@ -24,18 +23,16 @@ esphome:
             switch.is_on: use_dgr
           then:
             script.execute: dgr_loop
-      - if:
-          condition:
-            switch.is_on: use_ddp
-          then:
-            script.execute: ddp_loop
-      - if:
-          condition:
-            switch.is_on: use_e131
-          then:
-            script.execute: e131_loop
+
+external_components:
+  - source: github://pr#2868
+    components: [ light ]
+    refresh: 0s
+
+debug:
 
 logger:
+  level: debug
   logs:
     script: INFO
 
@@ -61,238 +58,330 @@ captive_portal:
 
 web_server:
 
-output:
-  - platform: esp8266_pwm
-    pin: GPIO5
-    id: pwm_pin
-
-globals:
-  - id: ddp_udp
-    type: WiFiUDP
-  - id: ddp_udp_up
-    type: int
-    initial_value: '0'
-
 script:
   - id: dgr_start
     mode: single
     then:
       - lambda: |-
-          InitTasmotaCompatibility();
+          EHDGR_Init("EHTest1");
   - id: dgr_loop
     mode: single
     then:
       - lambda: |-
-          DeviceGroupsStart();
-          DeviceGroupsLoop();
-      - lambda: |-
-          // debug messages
-          static unsigned long last_output_time = millis();
-          if (millis() < last_output_time + 10000) return;
-          last_output_time = millis();
-          ESP_LOGI("DGR", "Pr: %d - B: %d - C: %d, %d, %d, %d, %d - F: %d - Sp: %d - Sc: %d", 
-          EHDGR1.power_state, EHDGR1.brightness,
-          EHDGR1.channel_1, EHDGR1.channel_2, EHDGR1.channel_3, EHDGR1.channel_4, EHDGR1.channel_5,
-          EHDGR1.fade, EHDGR1.speed, EHDGR1.scheme);
-      - lambda: |-
-          // update light 1 state
-          static bool state = id(my_light).current_values.get_state();
-          static int brightness = id(my_light).current_values.get_brightness()*255;
-          
-          bool set_state_on  = false;
-          bool set_state_off = false;
-          bool set_brightness = false;
-          
-          bool n_state = EHDGR_PowerStateFromIndex(EHDGR1, 9);
-          
-          if (state != n_state) {
-            if (n_state) {
-              set_state_on = true;
-            } else {
-              set_state_off = true;
-            }
+          // Log EHDGR_State every 10s
+          static unsigned long last_state_log_time = millis();
+          if (millis() > last_state_log_time + 10000)
+          {
+            EHDGR_LogState();
+            last_state_log_time = millis();
           }
-          if (n_state && (brightness != EHDGR1.brightness)) {
-            set_brightness = true;
-          }
-          
-          if (set_state_on || set_brightness) {
-            int tt = 500*abs(state*brightness - EHDGR1.brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
-          
-            brightness = EHDGR1.brightness;
-            state = true;
-            
-            auto call = id(my_light).turn_on();
-            call.set_brightness((float)brightness/255.0f);
-            call.set_transition_length(tt);
-            call.perform();
-          }
-          
-          if (set_state_off) {
-            int tt = 500*abs(brightness)/255.0f*EHDGR1.fade*EHDGR1.speed;
-            
-            state = false;
-            
-            auto call = id(my_light).turn_off();
-            call.set_transition_length(tt);
-            call.perform();
-          }
+          EHDGR_StartAndLoop();
+          if (id(use_0ch).state) EHDGR_Update0ChLightFromDGR(1, light0ch);
+          if (id(use_1ch).state) EHDGR_Update1ChLightFromDGR(1, light1ch);
+          if (id(use_2ch).state) EHDGR_Update2ChLightFromDGR(1, light2ch);
+          if (id(use_3ch).state) EHDGR_Update3ChLightFromDGR(1, light3ch);
+          if (id(use_4ch).state) EHDGR_Update4ChLightFromDGR(1, light4ch);
+          if (id(use_5ch).state) EHDGR_Update5ChLightFromDGR(1, light5ch);
   - id: dgr_end
     mode: single
     then:
       - lambda: |-
-          DeviceGroupsStop();
-  - id: ddp_loop
-    mode: single
-    then:
-      - lambda: |-
-          // allocate and start UDP
-          if (!id(ddp_udp_up)) {
-            if (!id(ddp_udp).begin(4048)) {   // always listen on DDP port
-              return;
-            }
-            id(ddp_udp_up) = 1;
-          }
-          
-          // read UDP payload
-          std::vector<uint8_t> payload;
-          while (uint16_t packet_size = id(ddp_udp).parsePacket()) {
-            payload.resize(packet_size);
-            if (!id(ddp_udp).read(&payload[0], payload.size())) {
-              continue;
-            }
-          }
-      
-          // ignore small payload
-          if (payload.size() < 2) {
-            return;
-          }
-
-          // do the thing
-          float r = (float)payload[10]/255.0f;
-          float g = (float)payload[11]/255.0f;
-          float b = (float)payload[12]/255.0f;
-          
-          float m = 0.0f;
-          if ( (r>=g) && (r>=b) ) { m = r; }
-          else if ( g >= b )      { m = g; }
-          else                    { m = b; }
-          
-          float scaled_r = 0.0;
-          float scaled_g = 0.0;
-          float scaled_b = 0.0;
-          
-          if (m != 0.0f) {
-            scaled_r = r/m;
-            scaled_g = g/m;
-            scaled_b = b/m;
-          } else {
-            scaled_r = 0.0f;
-            scaled_g = 0.0f;
-            scaled_b = 0.0f;
-          }
-          
-          auto call = id(my_light).turn_on();
-          call.set_transition_length(0);
-          call.set_brightness(r); 
-          // call.set_color_mode(ColorMode::RGB);
-          // call.set_rgb(scaled_r, scaled_g, scaled_b);
-          call.set_publish(false);
-          call.set_save(false);
-          call.perform();
-  - id: ddp_end
-    mode: single
-    then:
-      - lambda: |-
-          if (id(ddp_udp_up)) {
-            id(ddp_udp).flush();
-            id(ddp_udp_up) = 0;
-          }
-  - id: e131_loop
-    mode: single
-    then:
-        lambda: |-
-          // use statics like Arduino declarations at the very top
-          static int state = 0;
-          static ESPAsyncE131 e131(1); // 1 universe
-          
-          // use state == 0 like setup() then state == 1 like loop()
-          if (state == 0) {
-            if (e131.begin(E131_MULTICAST, 1, 1))
-              state = 1;
-            else
-              return;
-          }
-          
-          if (e131.isEmpty()) return;
-            
-          e131_packet_t packet;
-          e131.pull(&packet);
-          
-          // do the thing
-          float r = (float)packet.property_values[1]/255.0f;
-          float g = (float)packet.property_values[2]/255.0f;
-          float b = (float)packet.property_values[3]/255.0f;
-          
-          float m = 0.0f;
-          if ( (r>=g) && (r>=b) ) { m = r; }
-          else if ( g >= b )      { m = g; }
-          else                    { m = b; }
-          
-          float scaled_r = 0.0;
-          float scaled_g = 0.0;
-          float scaled_b = 0.0;
-          
-          if (m != 0.0f) {
-            scaled_r = r/m;
-            scaled_g = g/m;
-            scaled_b = b/m;
-          } else {
-            scaled_r = 0.0f;
-            scaled_g = 0.0f;
-            scaled_b = 0.0f;
-          }
-          
-          auto call = id(my_light).turn_on();
-          call.set_transition_length(0);
-          call.set_brightness(r); 
-          // call.set_color_mode(ColorMode::RGB);
-          // call.set_rgb(scaled_r, scaled_g, scaled_b);
-          call.set_publish(false);
-          call.set_save(false);
-          call.perform();
+          EHDGR_Stop();
 
 switch:
   - platform: template
     id: use_dgr
-    name: "Use DGR"
+    name: "${friendly_name} DGR"
     optimistic: true
-    on_turn_on:
-      - switch.turn_off: use_ddp
-      - switch.turn_off: use_e131
     on_turn_off:
       - script.execute: dgr_end
-    
+      
   - platform: template
-    id: use_ddp
-    name: "Use DDP"
+    id: use_0ch
+    name: "${friendly_name} 0CH"
     optimistic: true
     on_turn_on:
-      - switch.turn_off: use_dgr
-      - switch.turn_off: use_e131
-    on_turn_off:
-      - script.execute: ddp_end
-    
+      - switch.turn_off: use_1ch
+      - switch.turn_off: use_2ch
+      - switch.turn_off: use_3ch
+      - switch.turn_off: use_4ch
+      - switch.turn_off: use_5ch
   - platform: template
-    id: use_e131
-    name: "Use E131"
+    id: use_1ch
+    name: "${friendly_name} 1CH"
     optimistic: true
     on_turn_on:
-      - switch.turn_off: use_dgr
-      - switch.turn_off: use_ddp
+      - switch.turn_off: use_0ch
+      - switch.turn_off: use_2ch
+      - switch.turn_off: use_3ch
+      - switch.turn_off: use_4ch
+      - switch.turn_off: use_5ch
+  - platform: template
+    id: use_2ch
+    name: "${friendly_name} 2CH"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_0ch
+      - switch.turn_off: use_1ch
+      - switch.turn_off: use_3ch
+      - switch.turn_off: use_4ch
+      - switch.turn_off: use_5ch
+  - platform: template
+    id: use_3ch
+    name: "${friendly_name} 3CH"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_0ch
+      - switch.turn_off: use_1ch
+      - switch.turn_off: use_2ch
+      - switch.turn_off: use_4ch
+      - switch.turn_off: use_5ch
+  - platform: template
+    id: use_4ch
+    name: "${friendly_name} 4CH"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_0ch
+      - switch.turn_off: use_1ch
+      - switch.turn_off: use_2ch
+      - switch.turn_off: use_3ch
+      - switch.turn_off: use_5ch
+  - platform: template
+    id: use_5ch
+    name: "${friendly_name} 5CH"
+    optimistic: true
+    on_turn_on:
+      - switch.turn_off: use_0ch
+      - switch.turn_off: use_1ch
+      - switch.turn_off: use_2ch
+      - switch.turn_off: use_3ch
+      - switch.turn_off: use_4ch
+ 
+  - platform: restart
+    name: "${friendly_name} Restart"
+    
 
+    
 light:
+  - platform: binary
+    name: "${friendly_name} 0Ch Light"
+    id: light0ch
+    output: O0CHL
+    
   - platform: monochromatic
-    name: $friendly_name
-    id: my_light
-    output: pwm_pin
+    name: "${friendly_name} 1Ch Light"
+    id: light1ch
+    output: O1CHLCH1
+    gamma_correct: 1.0
+
+  - platform: cwww
+    name: "${friendly_name} 2Ch Light"
+    id: light2ch
+    cold_white: O2CHLCH1
+    warm_white: O2CHLCH2
+    cold_white_color_temperature: 6536 K
+    warm_white_color_temperature: 2000 K
+    constant_brightness: true
+    gamma_correct: 1.0
+    
+  - platform: rgb
+    name: "${friendly_name} 3Ch Light"
+    id: light3ch
+    red: O3CHLCH1
+    green: O3CHLCH2
+    blue: O3CHLCH3
+    gamma_correct: 1.0
+    
+  - platform: rgbw
+    name: "${friendly_name} 4Ch Light"
+    id: light4ch
+    red:   O4CHLCH1
+    green: O4CHLCH2
+    blue:  O4CHLCH3
+    white: O4CHLCH4
+    color_interlock: true
+    gamma_correct: 1.0
+    
+  - platform: rgbww
+    name: "${friendly_name} 5Ch Light"
+    id: light5ch
+    red: O5CHLCH1
+    green: O5CHLCH2
+    blue: O5CHLCH3
+    cold_white: O5CHLCH4
+    warm_white: O5CHLCH5
+    color_interlock: true
+    cold_white_color_temperature: 6536 K
+    warm_white_color_temperature: 2000 K
+    constant_brightness: true
+    gamma_correct: 1.0
+
+output:
+  - platform: gpio
+    pin: GPIO2
+    id: O0CHL
+    inverted: true
+    
+  - platform: esp8266_pwm
+    pin: GPIO5
+    id: O1CHLCH1
+    
+  - platform: template
+    id: O2CHLCH1
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S2CHLCH1
+          state: !lambda "return state;"
+  - platform: template
+    id: O2CHLCH2
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S2CHLCH2
+          state: !lambda "return state;"
+          
+  - platform: template
+    id: O3CHLCH1
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S3CHLCH1
+          state: !lambda "return state;"
+  - platform: template
+    id: O3CHLCH2
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S3CHLCH2
+          state: !lambda "return state;"
+  - platform: template
+    id: O3CHLCH3
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S3CHLCH3
+          state: !lambda "return state;"
+          
+  - platform: template
+    id: O4CHLCH1
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S4CHLCH1
+          state: !lambda "return state;"
+  - platform: template
+    id: O4CHLCH2
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S4CHLCH2
+          state: !lambda "return state;"
+  - platform: template
+    id: O4CHLCH3
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S4CHLCH3
+          state: !lambda "return state;"
+  - platform: template
+    id: O4CHLCH4
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S4CHLCH4
+          state: !lambda "return state;"
+          
+  - platform: template
+    id: O5CHLCH1
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S5CHLCH1
+          state: !lambda "return state;"
+  - platform: template
+    id: O5CHLCH2
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S5CHLCH2
+          state: !lambda "return state;"
+  - platform: template
+    id: O5CHLCH3
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S5CHLCH3
+          state: !lambda "return state;"
+  - platform: template
+    id: O5CHLCH4
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S5CHLCH4
+          state: !lambda "return state;"
+  - platform: template
+    id: O5CHLCH5
+    type: float
+    write_action:
+      - sensor.template.publish:
+          id: S5CHLCH5
+          state: !lambda "return state;"
+          
+sensor:
+  - platform: template
+    id: S2CHLCH1
+    name: "${friendly_name} 2Ch Light Ch 1"
+    accuracy_decimals: 3
+  - platform: template
+    id: S2CHLCH2
+    name: "${friendly_name} 2Ch Light Ch 2"
+    accuracy_decimals: 3
+  - platform: template
+    id: S3CHLCH1
+    name: "${friendly_name} 3Ch Light Ch 1"
+    accuracy_decimals: 3
+  - platform: template
+    id: S3CHLCH2
+    name: "${friendly_name} 3Ch Light Ch 2"
+    accuracy_decimals: 3
+  - platform: template
+    id: S3CHLCH3
+    name: "${friendly_name} 3Ch Light Ch 3"
+    accuracy_decimals: 3
+  - platform: template
+    id: S4CHLCH1
+    name: "${friendly_name} 4Ch Light Ch 1"
+    accuracy_decimals: 3
+  - platform: template
+    id: S4CHLCH2
+    name: "${friendly_name} 4Ch Light Ch 2"
+    accuracy_decimals: 3
+  - platform: template
+    id: S4CHLCH3
+    name: "${friendly_name} 4Ch Light Ch 3"
+    accuracy_decimals: 3
+  - platform: template
+    id: S4CHLCH4
+    name: "${friendly_name} 4Ch Light Ch 4"
+    accuracy_decimals: 3
+  - platform: template
+    id: S5CHLCH1
+    name: "${friendly_name} 5Ch Light Ch 1"
+    accuracy_decimals: 3
+  - platform: template
+    id: S5CHLCH2
+    name: "${friendly_name} 5Ch Light Ch 2"
+    accuracy_decimals: 3
+  - platform: template
+    id: S5CHLCH3
+    name: "${friendly_name} 5Ch Light Ch 3"
+    accuracy_decimals: 3
+  - platform: template
+    id: S5CHLCH4
+    name: "${friendly_name} 5Ch Light Ch 4"
+    accuracy_decimals: 3
+  - platform: template
+    id: S5CHLCH5
+    name: "${friendly_name} 5Ch Light Ch 5"
+    accuracy_decimals: 3
