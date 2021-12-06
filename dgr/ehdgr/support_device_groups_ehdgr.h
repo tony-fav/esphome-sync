@@ -454,7 +454,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
           case DGR_ITEM_LIGHT_BRI:
             EHDGR_State.brightness = (uint8_t)value;
             EHDGR_State.source = SRC_REMOTE;
-            EHDGR_State.recv_light = true;
+            EHDGR_State.recv_brightness = true;
             break;
           case DGR_ITEM_LIGHT_CHANNELS:
             EHDGR_State.channel_1 = (uint8_t)XdrvMailbox.data[0];
@@ -463,7 +463,7 @@ void SendReceiveDeviceGroupMessage(struct device_group * device_group, struct de
             EHDGR_State.channel_4 = (uint8_t)XdrvMailbox.data[3];
             EHDGR_State.channel_5 = (uint8_t)XdrvMailbox.data[4];
             EHDGR_State.source = SRC_REMOTE;
-            EHDGR_State.recv_light = true;
+            EHDGR_State.recv_channels = true;
             break;
         }
         XdrvCall(FUNC_DEVICE_GROUP_ITEM);

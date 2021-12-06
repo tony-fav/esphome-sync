@@ -18,7 +18,8 @@ typedef struct {
   uint8_t channel_4 = 0;
   uint8_t channel_5 = 0;
   uint8_t source = 0;
-  bool recv_light = false;
+  bool recv_brightness = false;
+  bool recv_channels = false;
 } DGRState;
 
 DGRState EHDGR_State;
@@ -261,61 +262,6 @@ void EHDGR_SetPowerState(uint32_t device, uint32_t state)
   SendDeviceGroupMessage(device, DGR_MSGTYP_UPDATE, DGR_ITEM_POWER, EHDGR_State.power_state);
 }
 
-/*
-void EHDGR_Update1ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
-{
-  // Light's Commanded State
-  bool state = id(light).remote_values.get_state();
-  int brightness = id(light).remote_values.get_brightness()*255;
-  
-  // Light's Current State (in transition)
-  bool tstate = id(light).current_values.get_state();
-  int tbrightness = id(light).current_values.get_brightness()*255;
-  
-  // What to do
-  bool set_state_on  = false;
-  bool set_state_off = false;
-  
-  bool n_state = EHDGR_GetPowerState(device);
-  
-  if (state != n_state) {
-    if (n_state) {
-      set_state_on = true;
-    } else {
-      set_state_off = true;
-    }
-  }
-  if (n_state && (brightness != EHDGR_State.brightness)) {
-    set_state_on = true;
-  }
-  
-  if (set_state_on) {
-    int td = tstate*tbrightness - EHDGR_State.brightness;
-    if (td < 0) td = -td;
-    int tt = 500*td/(255.0f)*EHDGR_State.fade*EHDGR_State.speed;
-    
-    brightness = EHDGR_State.brightness;
-    state = true;
-
-    auto call = id(light).turn_on();
-    call.set_brightness((float)brightness/255.0f);
-    call.set_transition_length(tt);
-    call.perform();
-
-  }
-  
-  if (set_state_off) {
-    int tt = 500*brightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-    
-    state = false;
-    
-    auto call = id(light).turn_off();
-    call.set_transition_length(tt);
-    call.perform();
-  }
-}
-*/
-
 void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
 {
   // Light's Current State (in transition)
@@ -341,8 +287,8 @@ void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       set_state_off = true;
     }
   }
-
-  if (EHDGR_State.recv_light)
+  
+  if (EHDGR_State.recv_brightness && EHDGR_State.recv_channels)
   {
     set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
     set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
@@ -379,10 +325,13 @@ void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* li
         call.perform();
       }
     }
-    
-    if (set_state_off) {
+  } else if (EHDGR_State.recv_brightness) {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+
+    if (set_state_on) {
       int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-      auto call = id(light).turn_off();
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
       call.set_transition_length(tt);
       call.perform();
     }
@@ -393,13 +342,13 @@ void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       call.set_transition_length(tt);
       call.perform();
     }
-    
-    if (set_state_off) {
-      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-      auto call = id(light).turn_off();
-      call.set_transition_length(tt);
-      call.perform();
-    }
+  }
+
+  if (set_state_off) {
+    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+    auto call = id(light).turn_off();
+    call.set_transition_length(tt);
+    call.perform();
   }
 
   EHDGR_LastLightState = EHDGR_State;
@@ -430,7 +379,7 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
     }
   }
 
-  if (EHDGR_State.recv_light)
+  if (EHDGR_State.recv_brightness && EHDGR_State.recv_channels)
   {
     set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
     set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
@@ -463,10 +412,13 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
         call.perform();
       }
     }
-    
-    if (set_state_off) {
+  } else if (EHDGR_State.recv_brightness) {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+
+    if (set_state_on) {
       int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-      auto call = id(light).turn_off();
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
       call.set_transition_length(tt);
       call.perform();
     }
@@ -477,13 +429,255 @@ void EHDGR_Update4ChLightFromDGR(uint32_t device, esphome::light::LightState* li
       call.set_transition_length(tt);
       call.perform();
     }
+  }
+
+  if (set_state_off) {
+    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+    auto call = id(light).turn_off();
+    call.set_transition_length(tt);
+    call.perform();
+  }
+
+  EHDGR_LastLightState = EHDGR_State;
+}
+
+// todo: Is this expected behavior of 3CH response to 2CH data?
+void EHDGR_Update3ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
+{
+  // Light's Current State (in transition)
+  bool tstate = id(light).current_values.get_state();
+  int tbrightness = id(light).current_values.get_brightness()*255;
+  int tc1 = id(light).current_values.get_red()*255;
+  int tc2 = id(light).current_values.get_green()*255;
+  int tc3 = id(light).current_values.get_blue()*255;
+
+
+  bool set_state_on  = false;
+  bool set_state_off = false;
+  
+  bool state = EHDGR_GetPowerState(device, EHDGR_LastLightState);
+  bool n_state = EHDGR_GetPowerState(device);
+  
+  if ((state != n_state) || (EHDGR_LastLightState.source == SRC_MAX)) {
+    if (n_state) {
+      set_state_on = true;
+    } else {
+      set_state_off = true;
+    }
+  }
+  
+  if (EHDGR_State.recv_brightness && EHDGR_State.recv_channels)
+  {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_1 != EHDGR_State.channel_1));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_2 != EHDGR_State.channel_2));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_3 != EHDGR_State.channel_3));
     
-    if (set_state_off) {
+    if (set_state_on) {
+      int td = 0;
+      td = max(td, abs(tstate*tbrightness*tc1 - EHDGR_State.brightness*EHDGR_State.channel_1));
+      td = max(td, abs(tstate*tbrightness*tc2 - EHDGR_State.brightness*EHDGR_State.channel_2));
+      td = max(td, abs(tstate*tbrightness*tc3 - EHDGR_State.brightness*EHDGR_State.channel_3));
+      int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
+
+      if ((EHDGR_State.channel_1 > 0) || (EHDGR_State.channel_2 > 0) || (EHDGR_State.channel_3 > 0)) {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_red((float)EHDGR_State.channel_1/255.0f);
+        call.set_green((float)EHDGR_State.channel_2/255.0f);
+        call.set_blue((float)EHDGR_State.channel_3/255.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      } else {
+        auto call = id(light).turn_on();
+        call.set_brightness((float)EHDGR_State.brightness/255.0f);
+        call.set_red((float)1.0f);
+        call.set_green((float)1.0f);
+        call.set_blue((float)1.0f);
+        call.set_transition_length(tt);
+        call.perform();
+      }
+    }
+  } else if (EHDGR_State.recv_brightness) {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+
+    if (set_state_on) {
       int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
-      auto call = id(light).turn_off();
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
       call.set_transition_length(tt);
       call.perform();
     }
+  } else {
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  }
+
+  if (set_state_off) {
+    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+    auto call = id(light).turn_off();
+    call.set_transition_length(tt);
+    call.perform();
+  }
+
+  EHDGR_LastLightState = EHDGR_State;
+}
+
+// todo: How to respond to 3CH data?
+void EHDGR_Update2ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
+{
+  // Light's Current State (in transition)
+  bool tstate = id(light).current_values.get_state();
+  int tbrightness = id(light).current_values.get_brightness()*255;
+  int tc4 = id(light).current_values.get_cold_white()*255;
+  int tc5 = id(light).current_values.get_warm_white()*255;
+
+
+  bool set_state_on  = false;
+  bool set_state_off = false;
+  
+  bool state = EHDGR_GetPowerState(device, EHDGR_LastLightState);
+  bool n_state = EHDGR_GetPowerState(device);
+  
+  if ((state != n_state) || (EHDGR_LastLightState.source == SRC_MAX)) {
+    if (n_state) {
+      set_state_on = true;
+    } else {
+      set_state_off = true;
+    }
+  }
+  
+  if (EHDGR_State.recv_brightness && EHDGR_State.recv_channels)
+  {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_4 != EHDGR_State.channel_4));
+    set_state_on |= (n_state && (EHDGR_LastLightState.channel_5 != EHDGR_State.channel_5));
+    
+    if (set_state_on) {
+      int td = 0;
+      td = max(td, abs(tstate*tbrightness*tc4 - EHDGR_State.brightness*EHDGR_State.channel_4));
+      td = max(td, abs(tstate*tbrightness*tc5 - EHDGR_State.brightness*EHDGR_State.channel_5));
+      int tt = 500*td/(255.0f*255.0f)*EHDGR_State.fade*EHDGR_State.speed;
+
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
+      call.set_cold_white((float)EHDGR_State.channel_4/255.0f);
+      call.set_warm_white((float)EHDGR_State.channel_5/255.0f);
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  } else if (EHDGR_State.recv_brightness) {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  } else {
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  }
+
+  if (set_state_off) {
+    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+    auto call = id(light).turn_off();
+    call.set_transition_length(tt);
+    call.perform();
+  }
+
+  EHDGR_LastLightState = EHDGR_State;
+}
+
+void EHDGR_Update1ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
+{
+  // Light's Current State (in transition)
+  bool tstate = id(light).current_values.get_state();
+  int tbrightness = id(light).current_values.get_brightness()*255;
+
+
+  bool set_state_on  = false;
+  bool set_state_off = false;
+  
+  bool state = EHDGR_GetPowerState(device, EHDGR_LastLightState);
+  bool n_state = EHDGR_GetPowerState(device);
+  
+  if ((state != n_state) || (EHDGR_LastLightState.source == SRC_MAX)) {
+    if (n_state) {
+      set_state_on = true;
+    } else {
+      set_state_off = true;
+    }
+  }
+  
+  if (EHDGR_State.recv_brightness) {
+    set_state_on |= (n_state && (EHDGR_LastLightState.brightness != EHDGR_State.brightness));
+
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_brightness((float)EHDGR_State.brightness/255.0f);
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  } else {
+    if (set_state_on) {
+      int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+      auto call = id(light).turn_on();
+      call.set_transition_length(tt);
+      call.perform();
+    }
+  }
+
+  if (set_state_off) {
+    int tt = 500*tbrightness/255.0f*EHDGR_State.fade*EHDGR_State.speed;
+    auto call = id(light).turn_off();
+    call.set_transition_length(tt);
+    call.perform();
+  }
+
+  EHDGR_LastLightState = EHDGR_State;
+}
+
+
+void EHDGR_Update0ChLightFromDGR(uint32_t device, esphome::light::LightState* light)
+{
+  // Light's Current State (in transition)
+  bool tstate = id(light).current_values.get_state();
+
+
+  bool set_state_on  = false;
+  bool set_state_off = false;
+  
+  bool state = EHDGR_GetPowerState(device, EHDGR_LastLightState);
+  bool n_state = EHDGR_GetPowerState(device);
+  
+  if ((state != n_state) || (EHDGR_LastLightState.source == SRC_MAX)) {
+    if (n_state) {
+      set_state_on = true;
+    } else {
+      set_state_off = true;
+    }
+  }
+  
+  if (set_state_on) {
+    auto call = id(light).turn_on();
+    call.perform();
+  }
+
+  if (set_state_off) {
+    auto call = id(light).turn_off();
+    call.perform();
   }
 
   EHDGR_LastLightState = EHDGR_State;
