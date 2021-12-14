@@ -256,10 +256,12 @@ bool EHDGR_GetPowerState(uint32_t device)
   return EHDGR_GetPowerState(device, EHDGR_State);
 }
 
-void EHDGR_SetPowerState(uint32_t device, uint32_t state)
+void EHDGR_SetPowerState(uint32_t device, uint32_t device_state)
 {
-  ExecuteCommandPower(device, state, SRC_SWITCH);
-  SendDeviceGroupMessage(device, DGR_MSGTYP_UPDATE, DGR_ITEM_POWER, EHDGR_State.power_state);
+  if (EHDGR_GetPowerState(device) != device_state) {
+    ExecuteCommandPower(device, device_state, SRC_SWITCH);
+    SendDeviceGroupMessage(device, DGR_MSGTYP_UPDATE, DGR_ITEM_POWER, EHDGR_State.power_state);
+  }
 }
 
 void EHDGR_Update5ChLightFromDGR(uint32_t device, esphome::light::LightState* light)

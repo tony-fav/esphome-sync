@@ -1,0 +1,108 @@
+substitutions:
+  friendly_name: d1mini-devgroup
+
+esphome:
+  name: d1mini-devgroup
+  platform: ESP8266
+  board: d1_mini
+  includes:
+    - ehdgr/support_device_groups_compat.h  # compatibility layer so support_device_groups_ehdgr.h need not be modified too much
+    - ehdgr/support_device_groups_ehdgr.h   # support_device_groups.ino modified as minimally as possible
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: dgr_start
+  on_loop:
+    then:
+      - if:
+          condition:
+            switch.is_on: use_dgr
+          then:
+            script.execute: dgr_loop
+
+external_components:
+  - source: github://esphome/esphome@dev
+    components: [ light ]
+
+debug:
+
+logger:
+  level: debug
+  logs:
+    script: INFO
+
+api:
+
+ota:
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_pass
+  manual_ip: # use a static IP so that sync'ing controller always knows what IP to use for control.
+    static_ip: !secret d1minidevgroup_ip
+    gateway: !secret wifi_gateway
+    subnet: !secret wifi_subnet
+
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+    
+  output_power: 17
+
+captive_portal:
+
+web_server:
+
+script:
+  - id: dgr_start
+    mode: single
+    then:
+      - lambda: |-
+          EHDGR_Init("EHTest1");
+  - id: dgr_loop
+    mode: single
+    then:
+      - lambda: |-
+          // Log EHDGR_State every 10s
+          static unsigned long last_state_log_time = millis();
+          if (millis() > last_state_log_time + 10000)
+          {
+            EHDGR_LogState();
+            last_state_log_time = millis();
+          }
+          EHDGR_StartAndLoop();
+          if (EHDGR_GetPowerState(1) != id(DGR_Relay_1).state) id(DGR_Relay_1).publish_state(EHDGR_GetPowerState(1));
+  - id: dgr_end
+    mode: single
+    then:
+      - lambda: |-
+          EHDGR_Stop();
+
+switch:
+  - platform: template
+    id: use_dgr
+    name: "${friendly_name} DGR"
+    optimistic: true
+    on_turn_off:
+      - script.execute: dgr_end
+ 
+  - platform: restart
+    name: "${friendly_name} Restart"
+    
+  - platform: template
+    name: "${friendly_name} DGR Relay 1"
+    id: DGR_Relay_1
+    turn_on_action:
+      - lambda: |-
+          EHDGR_SetPowerState(1, 1);
+    turn_off_action:
+      - lambda: |-
+          EHDGR_SetPowerState(1, 0);
+
+# need a light entity so some of the helper functions for lights compile
+# will have to figure out how to include or exclude that later
+light:
+  - platform: status_led
+    name: "${friendly_name} Status LED"
+    pin: GPIO2
+    

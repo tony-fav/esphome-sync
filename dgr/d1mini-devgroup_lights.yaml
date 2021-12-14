@@ -25,9 +25,8 @@ esphome:
             script.execute: dgr_loop
 
 external_components:
-  - source: github://pr#2868
+  - source: github://esphome/esphome@dev
     components: [ light ]
-    refresh: 0s
 
 debug:
 
